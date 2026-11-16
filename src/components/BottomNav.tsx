@@ -13,7 +13,7 @@ const TABS: { id: AppTab; label: string; icon: typeof Home }[] = [
   { id: 'categories', label: 'Categories', icon: Grid2X2 },
   { id: 'search', label: 'Search', icon: Search },
   { id: 'orders', label: 'Orders', icon: Package },
-  { id: 'profile', label: 'Profile', icon: User },
+  { id: 'profile', label: 'Account', icon: User },
 ];
 
 export function BottomNav({
@@ -24,7 +24,7 @@ export function BottomNav({
   return (
     <nav
       aria-label="Mobile bottom navigation"
-      className="md:hidden fixed bottom-0 inset-x-0 z-40 h-14 bg-[#FFFDF9]/95 backdrop-blur-md border-t border-[#E6DDD1] px-1 flex items-center justify-around shadow-[0_-4px_20px_rgba(59,35,20,0.06)]"
+      className="md:hidden fixed bottom-0 inset-x-0 z-40 h-14 bg-white/95 backdrop-blur-md border-t border-[#E4DFD5] px-1 flex items-center justify-around shadow-[0_-4px_20px_rgba(28,25,23,0.06)]"
     >
       {TABS.map((tab) => {
         const Icon = tab.icon;
@@ -37,14 +37,14 @@ export function BottomNav({
             aria-current={active ? 'page' : undefined}
             className={`relative flex-1 h-12 min-w-[48px] flex flex-col items-center justify-center gap-0.5 rounded-xl transition-colors cursor-pointer ${
               active
-                ? 'text-[#C45512]'
-                : 'text-[#6D4C3D] hover:text-[#3B2314]'
+                ? 'text-[#9A3412]'
+                : 'text-[#57534E] hover:text-[#1C1917]'
             }`}
           >
             <span className="relative">
               <Icon className="w-5 h-5" strokeWidth={active ? 2.25 : 1.75} />
               {tab.id === 'orders' && activeOrdersCount > 0 && (
-                <span className="absolute -top-1 -right-2 min-w-[14px] h-[14px] px-1 rounded-full bg-[#C45512] text-white text-[9px] font-mono-tabular font-semibold flex items-center justify-center">
+                <span className="absolute -top-1 -right-2 min-w-[14px] h-[14px] px-1 rounded-full bg-[#9A3412] text-white text-[9px] font-mono-tabular font-semibold flex items-center justify-center">
                   {activeOrdersCount}
                 </span>
               )}

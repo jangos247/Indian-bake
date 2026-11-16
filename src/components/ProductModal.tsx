@@ -145,7 +145,7 @@ export function ProductModal({
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-4xl max-h-[92vh] overflow-y-auto bg-[#FAF5EE] border border-[#E6DDD1] rounded-2xl shadow-2xl grid grid-cols-1 lg:grid-cols-12"
+        className="relative w-full max-w-4xl max-h-[92vh] overflow-y-auto bg-[#FAFAF7] border border-[#E4DFD5] rounded-2xl shadow-2xl grid grid-cols-1 lg:grid-cols-12"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
@@ -153,24 +153,24 @@ export function ProductModal({
             type="button"
             onClick={() => onToggleWishlist(product.id)}
             aria-label={isWishlisted ? 'Remove from favourites' : 'Save to favourites'}
-            className="w-10 h-10 flex items-center justify-center rounded-full bg-[#FFFDF9]/95 text-[#3B2314] border border-[#E6DDD1] hover:border-[#C45512] transition-colors cursor-pointer"
+            className="w-10 h-10 flex items-center justify-center rounded-full bg-[#FFFFFF]/95 text-[#1C1917] border border-[#E4DFD5] hover:border-[#9A3412] transition-colors cursor-pointer"
           >
             <Heart
-              className={`w-4 h-4 ${isWishlisted ? 'fill-[#C45512] text-[#C45512]' : 'text-[#6D4C3D]'}`}
+              className={`w-4 h-4 ${isWishlisted ? 'fill-[#9A3412] text-[#9A3412]' : 'text-[#57534E]'}`}
             />
           </button>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close product details"
-            className="w-10 h-10 flex items-center justify-center rounded-full bg-[#FFFDF9]/95 text-[#3B2314] border border-[#E6DDD1] hover:bg-white transition-colors cursor-pointer"
+            className="w-10 h-10 flex items-center justify-center rounded-full bg-[#FFFFFF]/95 text-[#1C1917] border border-[#E4DFD5] hover:bg-white transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Left Image & Reviews Column */}
-        <div className="lg:col-span-5 bg-[#F3EBDF] flex flex-col justify-between p-5 sm:p-6 space-y-6">
+        <div className="lg:col-span-5 bg-[#F2EFE9] flex flex-col justify-between p-5 sm:p-6 space-y-6">
           <div>
             <div className="aspect-[4/3] w-full overflow-hidden rounded-xl bg-[#EAE0D2]">
               <ResilientImage
@@ -180,33 +180,33 @@ export function ProductModal({
               />
             </div>
 
-            <div className="mt-5 pt-4 border-t border-[#E6DDD1] space-y-3 text-sm">
+            <div className="mt-5 pt-4 border-t border-[#E4DFD5] space-y-3 text-sm">
               <div>
-                <p className="text-xs font-medium text-[#6D4C3D]">Ingredients</p>
-                <p className="mt-1 text-[#3B2314] leading-relaxed">
+                <p className="text-xs font-medium text-[#57534E]">Ingredients</p>
+                <p className="mt-1 text-[#1C1917] leading-relaxed">
                   {product.ingredients.join(', ')}.
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-4 pt-1">
                 <div>
-                  <p className="text-xs font-medium text-[#6D4C3D]">Allergens</p>
-                  <p className="mt-0.5 text-xs text-[#3B2314]">{product.allergens}</p>
+                  <p className="text-xs font-medium text-[#57534E]">Allergens</p>
+                  <p className="mt-0.5 text-xs text-[#1C1917]">{product.allergens}</p>
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-[#6D4C3D]">Serving Tip</p>
-                  <p className="mt-0.5 text-xs text-[#3B2314]">{product.reheatTip}</p>
+                  <p className="text-xs font-medium text-[#57534E]">Serving Tip</p>
+                  <p className="mt-0.5 text-xs text-[#1C1917]">{product.reheatTip}</p>
                 </div>
               </div>
             </div>
           </div>
 
           {/* Customer Reviews & Ratings */}
-          <div className="pt-4 border-t border-[#E6DDD1] space-y-3">
+          <div className="pt-4 border-t border-[#E4DFD5] space-y-3">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold text-[#3B2314] uppercase tracking-wider">
+              <p className="text-xs font-semibold text-[#1C1917] uppercase tracking-wider">
                 Customer Reviews
               </p>
-              <span className="inline-flex items-center gap-1 text-xs font-mono-tabular font-semibold text-[#3B2314]">
+              <span className="inline-flex items-center gap-1 text-xs font-mono-tabular font-semibold text-[#1C1917]">
                 <Star className="w-3.5 h-3.5 fill-[#E06D1F] text-[#E06D1F]" />
                 {avgRating.toFixed(1)} ({totalReviews})
               </span>
@@ -217,28 +217,28 @@ export function ProductModal({
                 {reviews.map((rev) => (
                   <li
                     key={rev.id}
-                    className="p-2.5 rounded-xl bg-[#FFFDF9] border border-[#E6DDD1] text-xs"
+                    className="p-2.5 rounded-xl bg-[#FFFFFF] border border-[#E4DFD5] text-xs"
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold text-[#3B2314]">{rev.authorName}</span>
-                      <span className="inline-flex items-center gap-0.5 font-mono-tabular text-[#C45512]">
+                      <span className="font-semibold text-[#1C1917]">{rev.authorName}</span>
+                      <span className="inline-flex items-center gap-0.5 font-mono-tabular text-[#9A3412]">
                         {rev.rating}★
                       </span>
                     </div>
-                    <p className="mt-1 text-[#6D4C3D] leading-relaxed">{rev.comment}</p>
+                    <p className="mt-1 text-[#57534E] leading-relaxed">{rev.comment}</p>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-xs text-[#6D4C3D]">
+              <p className="text-xs text-[#57534E]">
                 Rated {avgRating.toFixed(1)}/5 by Mangalagiri customers. Be the first to add a written review!
               </p>
             )}
 
             <form onSubmit={(e) => void handleReviewFormSubmit(e)} className="space-y-2 pt-1">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-medium text-[#6D4C3D] inline-flex items-center gap-1">
-                  <MessageSquarePlus className="w-3.5 h-3.5 text-[#C45512]" />
+                <span className="text-xs font-medium text-[#57534E] inline-flex items-center gap-1">
+                  <MessageSquarePlus className="w-3.5 h-3.5 text-[#9A3412]" />
                   <span>Rate this item</span>
                 </span>
                 <div className="flex items-center gap-1">
@@ -269,12 +269,12 @@ export function ProductModal({
                   value={reviewComment}
                   onChange={(e) => setReviewComment(e.target.value)}
                   placeholder={user ? 'Share taste or freshness feedback...' : 'Sign in to leave a review...'}
-                  className="flex-1 px-3 py-1.5 text-xs bg-[#FFFDF9] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#C45512]"
+                  className="flex-1 px-3 py-1.5 text-xs bg-[#FFFFFF] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#9A3412]"
                 />
                 <button
                   type="submit"
                   disabled={submittingReview}
-                  className="px-3 py-1.5 text-xs font-medium bg-[#3B2314] hover:bg-[#52321E] text-white rounded-lg cursor-pointer shrink-0"
+                  className="px-3 py-1.5 text-xs font-medium bg-[#1C1917] hover:bg-[#52321E] text-white rounded-lg cursor-pointer shrink-0"
                 >
                   {user ? (submittingReview ? 'Saving...' : 'Post') : 'Sign In'}
                 </button>
@@ -289,7 +289,7 @@ export function ProductModal({
         {/* Right Contiguous Purchase & Cake Customization Module */}
         <div className="lg:col-span-7 p-6 sm:p-8 flex flex-col justify-between gap-6">
           <div>
-            <div className="flex items-center flex-wrap gap-2 text-xs text-[#6D4C3D] pr-20">
+            <div className="flex items-center flex-wrap gap-2 text-xs text-[#57534E] pr-20">
               <VegIndicator type={product.vegType ?? 'veg'} showLabel />
               <span aria-hidden="true">·</span>
               <span>{displayCategory}</span>
@@ -300,20 +300,20 @@ export function ProductModal({
               {product.offerLabel && (
                 <>
                   <span aria-hidden="true">·</span>
-                  <span className="font-semibold text-[#C45512]">{product.offerLabel}</span>
+                  <span className="font-semibold text-[#9A3412]">{product.offerLabel}</span>
                 </>
               )}
             </div>
 
             <h2
               id="pdp-title"
-              className="mt-2 font-display text-2xl sm:text-3xl font-semibold text-[#3B2314] tracking-tight"
+              className="mt-2 font-display text-2xl sm:text-3xl font-semibold text-[#1C1917] tracking-tight"
             >
               {product.name}
             </h2>
 
             <div className="mt-2 flex items-baseline gap-2.5">
-              <span className="font-mono-tabular text-xl font-semibold text-[#3B2314]">
+              <span className="font-mono-tabular text-xl font-semibold text-[#1C1917]">
                 {formatMoney(unitPrice, currency)}
               </span>
               {originalUnitPrice && (
@@ -323,13 +323,13 @@ export function ProductModal({
               )}
             </div>
 
-            <p className="mt-3 text-[15px] leading-relaxed text-[#6D4C3D]">
+            <p className="mt-3 text-[15px] leading-relaxed text-[#57534E]">
               {product.fullDescription}
             </p>
 
             {/* Variant / Size Selector */}
             <div className="mt-5">
-              <p className="text-xs font-medium text-[#6D4C3D] mb-2">
+              <p className="text-xs font-medium text-[#57534E] mb-2">
                 Select Size / Quantity
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -343,17 +343,17 @@ export function ProductModal({
                       onClick={() => setSelectedOptionId(option.id)}
                       className={`px-3.5 py-2.5 rounded-xl border text-left transition-colors cursor-pointer ${
                         isSelected
-                          ? 'border-[#C45512] bg-[#C45512]/8 text-[#3B2314]'
-                          : 'border-[#E6DDD1] bg-[#FFFDF9] text-[#6D4C3D] hover:border-[#CBBBA7]'
+                          ? 'border-[#9A3412] bg-[#9A3412]/8 text-[#1C1917]'
+                          : 'border-[#E4DFD5] bg-[#FFFFFF] text-[#57534E] hover:border-[#CBBBA7]'
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2 text-sm font-medium text-[#3B2314]">
+                      <div className="flex items-center justify-between gap-2 text-sm font-medium text-[#1C1917]">
                         <span className="truncate">{option.label}</span>
                         <span className="font-mono-tabular text-xs shrink-0">
                           {formatMoney(optionPrice, currency)}
                         </span>
                       </div>
-                      <p className="mt-0.5 text-xs text-[#6D4C3D] font-mono-tabular">
+                      <p className="mt-0.5 text-xs text-[#57534E] font-mono-tabular">
                         {option.weightLabel}
                       </p>
                     </button>
@@ -364,13 +364,13 @@ export function ProductModal({
 
             {/* Special Occasion & Custom Cake Builder */}
             {isCake && (
-              <div className="mt-5 p-4 rounded-xl bg-[#FFFDF9] border border-[#E6DDD1] space-y-3.5">
+              <div className="mt-5 p-4 rounded-xl bg-[#FFFFFF] border border-[#E4DFD5] space-y-3.5">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 text-xs font-semibold text-[#3B2314]">
-                    <Cake className="w-4 h-4 text-[#C45512]" />
+                  <div className="flex items-center gap-2 text-xs font-semibold text-[#1C1917]">
+                    <Cake className="w-4 h-4 text-[#9A3412]" />
                     <span>Custom Celebration Cake Options</span>
                   </div>
-                  <div className="inline-flex p-0.5 rounded-lg bg-[#F3EBDF]">
+                  <div className="inline-flex p-0.5 rounded-lg bg-[#F2EFE9]">
                     {[
                       { label: '100% Eggless', value: true },
                       { label: 'Classic Sponge', value: false },
@@ -381,8 +381,8 @@ export function ProductModal({
                         onClick={() => setEggless(choice.value)}
                         className={`px-2.5 py-1 text-[11px] font-medium rounded-md cursor-pointer transition-colors ${
                           eggless === choice.value
-                            ? 'bg-[#FFFDF9] text-[#3B2314] shadow-xs'
-                            : 'text-[#6D4C3D]'
+                            ? 'bg-[#FFFFFF] text-[#1C1917] shadow-xs'
+                            : 'text-[#57534E]'
                         }`}
                       >
                         {choice.label}
@@ -393,14 +393,14 @@ export function ProductModal({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label htmlFor="cake-occasion" className="block text-xs text-[#6D4C3D] mb-1">
+                    <label htmlFor="cake-occasion" className="block text-xs text-[#57534E] mb-1">
                       Special Occasion
                     </label>
                     <select
                       id="cake-occasion"
                       value={occasion}
                       onChange={(e) => setOccasion(e.target.value)}
-                      className="w-full px-3 py-2 text-xs bg-[#FAF5EE] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#C45512]"
+                      className="w-full px-3 py-2 text-xs bg-[#FAFAF7] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#9A3412]"
                     >
                       {CAKE_OCCASION_OPTIONS.map((occ) => (
                         <option key={occ} value={occ}>
@@ -411,14 +411,14 @@ export function ProductModal({
                   </div>
 
                   <div>
-                    <label htmlFor="cake-flavor" className="block text-xs text-[#6D4C3D] mb-1">
+                    <label htmlFor="cake-flavor" className="block text-xs text-[#57534E] mb-1">
                       Filling &amp; Flavor
                     </label>
                     <select
                       id="cake-flavor"
                       value={flavor}
                       onChange={(e) => setFlavor(e.target.value)}
-                      className="w-full px-3 py-2 text-xs bg-[#FAF5EE] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#C45512]"
+                      className="w-full px-3 py-2 text-xs bg-[#FAFAF7] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#9A3412]"
                     >
                       {CAKE_FLAVOR_OPTIONS.map((flv) => (
                         <option key={flv} value={flv}>
@@ -430,7 +430,7 @@ export function ProductModal({
                 </div>
 
                 <div>
-                  <label htmlFor="cake-msg" className="block text-xs text-[#6D4C3D] mb-1">
+                  <label htmlFor="cake-msg" className="block text-xs text-[#57534E] mb-1">
                     Message on Cake Plaque (Complimentary)
                   </label>
                   <input
@@ -440,12 +440,12 @@ export function ProductModal({
                     value={cakeMessage}
                     onChange={(e) => setCakeMessage(e.target.value)}
                     placeholder="e.g., Happy Birthday Priya!"
-                    className="w-full px-3 py-2 text-xs bg-[#FAF5EE] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#C45512]"
+                    className="w-full px-3 py-2 text-xs bg-[#FAFAF7] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#9A3412]"
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="cake-design" className="block text-xs text-[#6D4C3D] mb-1">
+                  <label htmlFor="cake-design" className="block text-xs text-[#57534E] mb-1">
                     Custom Design / Frosting Notes (Optional)
                   </label>
                   <input
@@ -455,7 +455,7 @@ export function ProductModal({
                     value={designNote}
                     onChange={(e) => setDesignNote(e.target.value)}
                     placeholder="e.g., Warm cream frosting, gold drip, less sugar"
-                    className="w-full px-3 py-2 text-xs bg-[#FAF5EE] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#C45512]"
+                    className="w-full px-3 py-2 text-xs bg-[#FAFAF7] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#9A3412]"
                   />
                 </div>
               </div>
@@ -463,18 +463,18 @@ export function ProductModal({
           </div>
 
           {/* Quantity & Primary Purchase CTA */}
-          <div className="pt-4 border-t border-[#E6DDD1] flex items-center gap-3">
-            <div className="flex items-center border border-[#D6C9B8] rounded-xl bg-[#FFFDF9]">
+          <div className="pt-4 border-t border-[#E4DFD5] flex items-center gap-3">
+            <div className="flex items-center border border-[#D6C9B8] rounded-xl bg-[#FFFFFF]">
               <button
                 type="button"
                 disabled={!product.inStock}
                 onClick={() => setQuantity((q) => Math.max(1, q - 1))}
                 aria-label="Decrease quantity"
-                className="w-10 h-11 flex items-center justify-center text-[#3B2314] hover:bg-[#F3EBDF] rounded-l-xl transition-colors cursor-pointer disabled:opacity-40"
+                className="w-10 h-11 flex items-center justify-center text-[#1C1917] hover:bg-[#F2EFE9] rounded-l-xl transition-colors cursor-pointer disabled:opacity-40"
               >
                 <Minus className="w-4 h-4" />
               </button>
-              <span className="w-9 text-center font-mono-tabular text-sm font-medium text-[#3B2314]">
+              <span className="w-9 text-center font-mono-tabular text-sm font-medium text-[#1C1917]">
                 {quantity}
               </span>
               <button
@@ -482,7 +482,7 @@ export function ProductModal({
                 disabled={!product.inStock}
                 onClick={() => setQuantity((q) => q + 1)}
                 aria-label="Increase quantity"
-                className="w-10 h-11 flex items-center justify-center text-[#3B2314] hover:bg-[#F3EBDF] rounded-r-xl transition-colors cursor-pointer disabled:opacity-40"
+                className="w-10 h-11 flex items-center justify-center text-[#1C1917] hover:bg-[#F2EFE9] rounded-r-xl transition-colors cursor-pointer disabled:opacity-40"
               >
                 <Plus className="w-4 h-4" />
               </button>
@@ -495,7 +495,7 @@ export function ProductModal({
                 onAddToCart(product, activeOption.id, quantity, buildCustomizationSummary());
                 onClose();
               }}
-              className="flex-1 h-11 px-5 bg-[#C45512] hover:bg-[#A9450C] disabled:bg-[#9CA3AF] text-white text-sm font-medium rounded-xl transition-colors flex items-center justify-between cursor-pointer whitespace-nowrap disabled:cursor-not-allowed"
+              className="flex-1 h-11 px-5 bg-[#9A3412] hover:bg-[#7C2D12] disabled:bg-[#9CA3AF] text-white text-sm font-medium rounded-xl transition-colors flex items-center justify-between cursor-pointer whitespace-nowrap disabled:cursor-not-allowed"
             >
               <span>{product.inStock ? 'Add to Cart' : 'Currently Sold Out'}</span>
               <span className="font-mono-tabular">{formatMoney(lineTotal, currency)}</span>

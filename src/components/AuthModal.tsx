@@ -136,22 +136,22 @@ export function AuthModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#2A180D]/55 p-4 sm:p-6"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1C1917]/55 p-4 sm:p-6"
       role="dialog"
       aria-modal="true"
       aria-labelledby="auth-modal-title"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl bg-[#FAF5EE] border border-[#E6DDD1] rounded-2xl shadow-2xl overflow-hidden"
+        className="w-full max-w-2xl bg-[#FAFAF7] border border-[#E4DFD5] rounded-2xl shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-6 py-4 bg-[#FFFDF9] border-b border-[#E6DDD1] flex items-center justify-between gap-4">
+        <div className="px-6 py-4 bg-white border-b border-[#E4DFD5] flex items-center justify-between gap-4">
           <div>
-            <h2 id="auth-modal-title" className="font-display text-xl font-semibold text-[#3B2314]">
+            <h2 id="auth-modal-title" className="font-display text-xl font-semibold text-[#1C1917]">
               {user ? 'Your Account' : 'Sign In & Registration'}
             </h2>
-            <p className="text-xs text-[#6D4C3D]">
+            <p className="text-xs text-[#57534E]">
               Separate portals for Customers and Bakery Owners
             </p>
           </div>
@@ -159,7 +159,7 @@ export function AuthModal({
             type="button"
             onClick={onClose}
             aria-label="Close login modal"
-            className="w-10 h-10 flex items-center justify-center rounded-lg text-[#6D4C3D] hover:text-[#3B2314] hover:bg-[#F3EBDF] cursor-pointer"
+            className="w-10 h-10 flex items-center justify-center rounded-lg text-[#57534E] hover:text-[#1C1917] hover:bg-[#F2EFE9] cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -177,7 +177,7 @@ export function AuthModal({
                   <button
                     type="button"
                     onClick={() => void handleCopyHost()}
-                    className="inline-flex items-center gap-1.5 min-h-[38px] px-3 py-1.5 bg-[#FFFDF9] border border-[#D6C9B8] text-[#3B2314] font-mono-tabular font-medium rounded-lg cursor-pointer"
+                    className="inline-flex items-center gap-1.5 min-h-[38px] px-3 py-1.5 bg-white border border-[#D6D0C4] text-[#1C1917] font-mono-tabular font-medium rounded-lg cursor-pointer"
                   >
                     {copiedHost ? (
                       <>
@@ -195,7 +195,7 @@ export function AuthModal({
                     href={firebaseAuthSettingsUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 min-h-[38px] px-3 py-1.5 bg-[#C45512] text-white font-medium rounded-lg"
+                    className="inline-flex items-center gap-1.5 min-h-[38px] px-3 py-1.5 bg-[#9A3412] text-white font-medium rounded-lg"
                   >
                     <span>Open Authorized Domains</span>
                     <ExternalLink className="w-3.5 h-3.5" />
@@ -206,37 +206,37 @@ export function AuthModal({
           )}
 
           {user ? (
-            <div className="p-5 bg-[#FFFDF9] border border-[#E6DDD1] rounded-2xl space-y-4">
+            <div className="p-5 bg-white border border-[#E4DFD5] rounded-2xl space-y-4">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-xs font-medium text-[#C45512]">
+                  <p className="text-xs font-medium text-[#9A3412]">
                     {isOwner ? 'Bakery Owner Account' : 'Customer Account'}
                   </p>
-                  <p className="mt-1 text-lg font-semibold text-[#3B2314]">
+                  <p className="mt-1 text-lg font-semibold text-[#1C1917]">
                     {user.displayName || 'Signed In User'}
                   </p>
-                  <p className="text-xs font-mono-tabular text-[#6D4C3D]">
+                  <p className="text-xs font-mono-tabular text-[#57534E]">
                     {resolvedEmail || 'Google Account'}
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => void handleSignOut()}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#6D4C3D] hover:text-[#B91C1C] bg-[#F3EBDF] rounded-xl cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#57534E] hover:text-[#991B1B] bg-[#F2EFE9] rounded-xl cursor-pointer"
                 >
                   <LogOut className="w-3.5 h-3.5" />
                   <span>Sign Out</span>
                 </button>
               </div>
 
-              <div className="pt-4 border-t border-[#E6DDD1] flex flex-wrap gap-3">
+              <div className="pt-4 border-t border-[#E4DFD5] flex flex-wrap gap-3">
                 <button
                   type="button"
                   onClick={() => {
                     onClose();
                     onOpenOrders();
                   }}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-medium bg-[#3B2314] hover:bg-[#52321E] text-white rounded-xl cursor-pointer"
+                  className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-medium bg-[#1C1917] hover:bg-[#33302D] text-white rounded-xl cursor-pointer"
                 >
                   <ShoppingBag className="w-3.5 h-3.5" />
                   <span>View My Orders</span>
@@ -249,7 +249,7 @@ export function AuthModal({
                       onClose();
                       onOpenOwnerStudio();
                     }}
-                    className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-medium bg-[#C45512] hover:bg-[#A9450C] text-white rounded-xl cursor-pointer"
+                    className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-medium bg-[#9A3412] hover:bg-[#7C2D12] text-white rounded-xl cursor-pointer"
                   >
                     <ShieldCheck className="w-3.5 h-3.5" />
                     <span>Open Owner Studio</span>
@@ -259,9 +259,9 @@ export function AuthModal({
                     type="button"
                     onClick={() => void handleGoogleSignIn('owner')}
                     disabled={loadingRole !== null}
-                    className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-medium border border-[#D6C9B8] bg-[#FFFDF9] hover:border-[#3B2314] text-[#3B2314] rounded-xl cursor-pointer"
+                    className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-medium border border-[#D6D0C4] bg-white hover:border-[#1C1917] text-[#1C1917] rounded-xl cursor-pointer"
                   >
-                    <ShieldCheck className="w-3.5 h-3.5 text-[#C45512]" />
+                    <ShieldCheck className="w-3.5 h-3.5 text-[#9A3412]" />
                     <span>Switch to Owner Account</span>
                   </button>
                 )}
@@ -271,18 +271,18 @@ export function AuthModal({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Option 1: Customer Login */}
               <div
-                className={`p-5 bg-[#FFFDF9] border rounded-2xl flex flex-col justify-between gap-5 transition-colors ${
-                  initialMode === 'customer' ? 'border-[#3B2314]' : 'border-[#E6DDD1]'
+                className={`p-5 bg-white border rounded-2xl flex flex-col justify-between gap-5 transition-colors ${
+                  initialMode === 'customer' ? 'border-[#1C1917]' : 'border-[#E4DFD5]'
                 }`}
               >
                 <div>
-                  <div className="w-10 h-10 rounded-xl bg-[#F3EBDF] flex items-center justify-center text-[#3B2314] mb-3">
+                  <div className="w-10 h-10 rounded-xl bg-[#F2EFE9] flex items-center justify-center text-[#1C1917] mb-3">
                     <UserIcon className="w-5 h-5" strokeWidth={1.75} />
                   </div>
-                  <h3 className="font-display text-lg font-semibold text-[#3B2314]">
+                  <h3 className="font-display text-lg font-semibold text-[#1C1917]">
                     Customer Sign In / Register
                   </h3>
-                  <p className="mt-1.5 text-xs leading-relaxed text-[#6D4C3D]">
+                  <p className="mt-1.5 text-xs leading-relaxed text-[#57534E]">
                     Place home delivery orders, save addresses &amp; favourites, write reviews, and track cakes &amp; snacks live.
                   </p>
                 </div>
@@ -291,7 +291,7 @@ export function AuthModal({
                   type="button"
                   disabled={loadingRole !== null}
                   onClick={() => void handleGoogleSignIn('customer')}
-                  className="w-full py-2.5 px-4 bg-[#3B2314] hover:bg-[#52321E] disabled:opacity-60 text-white text-xs font-medium rounded-xl transition-colors cursor-pointer"
+                  className="w-full py-2.5 px-4 bg-[#1C1917] hover:bg-[#33302D] disabled:opacity-60 text-white text-xs font-medium rounded-xl transition-colors cursor-pointer"
                 >
                   {loadingRole === 'customer' ? 'Signing in...' : 'Continue with Google'}
                 </button>
@@ -299,18 +299,18 @@ export function AuthModal({
 
               {/* Option 2: Owner Login */}
               <div
-                className={`p-5 bg-[#FFFDF9] border rounded-2xl flex flex-col justify-between gap-5 transition-colors ${
-                  initialMode === 'owner' ? 'border-[#C45512]' : 'border-[#E6DDD1]'
+                className={`p-5 bg-white border rounded-2xl flex flex-col justify-between gap-5 transition-colors ${
+                  initialMode === 'owner' ? 'border-[#9A3412]' : 'border-[#E4DFD5]'
                 }`}
               >
                 <div>
-                  <div className="w-10 h-10 rounded-xl bg-[#C45512]/12 flex items-center justify-center text-[#C45512] mb-3">
+                  <div className="w-10 h-10 rounded-xl bg-[#9A3412]/10 flex items-center justify-center text-[#9A3412] mb-3">
                     <ShieldCheck className="w-5 h-5" strokeWidth={1.75} />
                   </div>
-                  <h3 className="font-display text-lg font-semibold text-[#3B2314]">
+                  <h3 className="font-display text-lg font-semibold text-[#1C1917]">
                     Bakery Owner Portal
                   </h3>
-                  <p className="mt-1.5 text-xs leading-relaxed text-[#6D4C3D]">
+                  <p className="mt-1.5 text-xs leading-relaxed text-[#57534E]">
                     Manage Indian Bakery &amp; Cafe items, upload photos, run festival discounts, update taxes/UPI, and dispatch orders.
                   </p>
                 </div>
@@ -319,7 +319,7 @@ export function AuthModal({
                   type="button"
                   disabled={loadingRole !== null}
                   onClick={() => void handleGoogleSignIn('owner')}
-                  className="w-full py-2.5 px-4 bg-[#C45512] hover:bg-[#A9450C] disabled:opacity-60 text-white text-xs font-medium rounded-xl transition-colors cursor-pointer"
+                  className="w-full py-2.5 px-4 bg-[#9A3412] hover:bg-[#7C2D12] disabled:opacity-60 text-white text-xs font-medium rounded-xl transition-colors cursor-pointer"
                 >
                   {loadingRole === 'owner' ? 'Verifying Owner...' : 'Sign In as Bakery Owner'}
                 </button>

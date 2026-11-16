@@ -4,6 +4,7 @@ import {
   Edit3,
   Plus,
   RotateCcw,
+  Search,
   ShieldCheck,
   Sparkles,
   Tag,
@@ -19,6 +20,11 @@ import {
   PRESET_PRODUCT_IMAGES,
   resolveBakeryImageUrl,
 } from '../data/bakeryData';
+import {
+  computeOwnerAnalytics,
+  filterOrdersForConsole,
+  OrderConsoleFilter,
+} from '../utils/bakeryLogic';
 import { BOOTSTRAPPED_OWNER_EMAILS, emailToOwnerDocId } from '../lib/firebase';
 import {
   BakerySettings,
@@ -161,6 +167,8 @@ export function OwnerStudioModal({
   onRemoveOwner,
 }: OwnerStudioModalProps) {
   const [activeTab, setActiveTab] = useState<'products' | 'offers' | 'orders' | 'settings' | 'owners' | 'publish'>('products');
+  const [orderConsoleFilter, setOrderConsoleFilter] = useState<OrderConsoleFilter>('all');
+  const [orderSearchQuery, setOrderSearchQuery] = useState('');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [ingredientsText, setIngredientsText] = useState('');
   const [savedNotice, setSavedNotice] = useState('');
@@ -220,8 +228,8 @@ export function OwnerStudioModal({
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <ShieldCheck className="w-5 h-5 text-[#C45512]" />
-              <h2 className="font-display text-lg font-semibold text-[#171716]">
+              <ShieldCheck className="w-5 h-5 text-[#9A3412]" />
+              <h2 className="font-display text-lg font-semibold text-[#1C1917]">
                 Bakery Owner Login Required
               </h2>
             </div>
@@ -229,12 +237,12 @@ export function OwnerStudioModal({
               type="button"
               onClick={onClose}
               aria-label="Close"
-              className="p-1.5 rounded-lg text-[#5C5A55] hover:bg-[#F3F2EE] cursor-pointer"
+              className="p-1.5 rounded-lg text-[#57534E] hover:bg-[#F2EFE9] cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
-          <p className="text-xs leading-relaxed text-[#5C5A55]">
+          <p className="text-xs leading-relaxed text-[#57534E]">
             Sign in with your authorized Bakery Owner Google account to add/edit menu items, publish festival discounts, and update live orders across all customer devices.
           </p>
           <button
@@ -243,7 +251,7 @@ export function OwnerStudioModal({
               onClose();
               onRequestOwnerSignIn();
             }}
-            className="w-full py-2.5 bg-[#C45512] hover:bg-[#A9450C] text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
+            className="w-full py-2.5 bg-[#9A3412] hover:bg-[#7C2D12] text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
           >
             Go to Owner Login
           </button>
@@ -506,8 +514,6 @@ export function OwnerStudioModal({
     }));
   };
 
-  const totalRevenue = orders.reduce((sum, o) => sum + o.total, 0);
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 sm:p-6"
@@ -574,8 +580,8 @@ export function OwnerStudioModal({
                 }}
                 className={`px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
                   activeTab === tab.id
-                    ? 'bg-white text-[#171716] shadow-xs'
-                    : 'text-[#5C5A55] hover:text-[#171716]'
+                    ? 'bg-white text-[#1C1917] shadow-xs'
+                    : 'text-[#57534E] hover:text-[#1C1917]'
                 }`}
               >
                 {tab.label}
@@ -592,7 +598,7 @@ export function OwnerStudioModal({
                     showNotice('Loaded complete 8-category Indian Bakery menu & festival offers.')
                   );
                 }}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#5C5A55] hover:text-[#171716] bg-white border border-[#D8D5CC] rounded-lg cursor-pointer whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#57534E] hover:text-[#1C1917] bg-white border border-[#D6D0C4] rounded-lg cursor-pointer whitespace-nowrap"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>Load 8-Category Menu</span>
@@ -600,7 +606,7 @@ export function OwnerStudioModal({
               <button
                 type="button"
                 onClick={startNewProduct}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#C45512] hover:bg-[#A9450C] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#9A3412] hover:bg-[#7C2D12] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
               >
                 <Plus className="w-4 h-4" />
                 <span>Add Product</span>
@@ -1355,115 +1361,173 @@ export function OwnerStudioModal({
           )}
 
           {/* TAB 3: ORDERS */}
-          {activeTab === 'orders' && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                <div className="p-4 bg-white border border-[#E5E3DC] rounded-xl">
-                  <p className="text-xs text-[#5C5A55]">Total Orders</p>
-                  <p className="mt-1 font-mono-tabular text-2xl font-semibold text-[#171716]">
-                    {orders.length}
-                  </p>
-                </div>
-                <div className="p-4 bg-white border border-[#E5E3DC] rounded-xl">
-                  <p className="text-xs text-[#5C5A55]">Order Volume</p>
-                  <p className="mt-1 font-mono-tabular text-2xl font-semibold text-[#171716]">
-                    {formatMoney(totalRevenue, settings.currency)}
-                  </p>
-                </div>
-                <div className="p-4 bg-white border border-[#E5E3DC] rounded-xl col-span-2 sm:col-span-1">
-                  <p className="text-xs text-[#5C5A55]">Active Dispatch</p>
-                  <p className="mt-1 font-mono-tabular text-2xl font-semibold text-[#171716]">
-                    {orders.filter((o) => o.stage !== 'delivered').length}
-                  </p>
-                </div>
-              </div>
-
-              {orders.length === 0 ? (
-                <div className="p-8 bg-white border border-[#E5E3DC] rounded-xl text-center text-sm text-[#5C5A55]">
-                  No customer orders have been placed yet. Incoming orders will appear here live.
-                </div>
-              ) : (
-                orders.map((order) => (
-                  <div
-                    key={order.id}
-                    className="p-5 bg-white border border-[#E5E3DC] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-                  >
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-[#5C5A55]">
-                        <span className="font-mono-tabular font-semibold text-[#171716]">
-                          #{order.id}
-                        </span>
-                        <span aria-hidden="true">·</span>
-                        <span>
-                          {order.deliveryDay}, {order.deliveryWindow}
-                        </span>
-                        <span aria-hidden="true">·</span>
-                        <span className="font-medium text-[#C45512]">
-                          {STAGE_LABELS[order.stage]}
-                        </span>
-                        <span aria-hidden="true">·</span>
-                        <span
-                          className={
-                            order.paymentStatus === 'verified' || order.paymentStatus === 'paid'
-                              ? 'font-medium text-[#166534]'
-                              : order.paymentStatus === 'verification_pending'
-                                ? 'font-medium text-[#92400E]'
-                                : 'text-[#5C5A55]'
-                          }
-                        >
-                          {PAYMENT_LABELS[order.paymentMethod]} (
-                          {PAYMENT_STATUS_LABELS[order.paymentStatus ?? 'pending']})
-                        </span>
-                      </div>
-                      <p className="text-sm font-semibold text-[#171716]">
-                        {order.customer.fullName} ({order.customer.phone}) — {order.customer.streetAddress} ({order.customer.postalCode})
-                      </p>
-                      <p className="text-xs text-[#5C5A55]">
-                        {order.items.map((i) => `${i.quantity}× ${i.name}`).join(', ')} ·{' '}
-                        <span className="font-mono-tabular font-medium text-[#171716]">
-                          {formatMoney(order.total, settings.currency)}
-                        </span>
-                        {order.upiReference && (
-                          <>
-                            {' · '}
-                            <span className="font-mono-tabular text-[#171716]">
-                              UTR: {order.upiReference}
-                            </span>
-                          </>
-                        )}
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                      {order.paymentStatus !== 'verified' && order.paymentStatus !== 'paid' && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void onUpdatePaymentStatus(
-                              order.id,
-                              order.paymentMethod === 'upi_prepaid' ? 'verified' : 'paid'
-                            )
-                          }
-                          className="px-3.5 py-2 text-xs font-medium text-[#166534] bg-[#F0FDF4] hover:bg-[#DCFCE7] border border-[#BBF7D0] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
-                        >
-                          {order.paymentMethod === 'upi_prepaid' ? 'Confirm UPI Paid' : 'Mark Paid'}
-                        </button>
-                      )}
-                      {order.stage !== 'delivered' && (
-                        <button
-                          type="button"
-                          onClick={() => void onAdvanceOrderStage(order.id)}
-                          className="px-4 py-2 text-xs font-medium text-white bg-[#171716] hover:bg-[#33322E] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
-                        >
-                          Advance Stage
-                        </button>
-                      )}
-                    </div>
+          {activeTab === 'orders' && (() => {
+            const analytics = computeOwnerAnalytics(orders, products);
+            const filteredConsoleOrders = filterOrdersForConsole(
+              orders,
+              orderConsoleFilter,
+              orderSearchQuery
+            );
+            return (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+                  <div className="p-4 bg-white border border-[#E5E3DC] rounded-xl">
+                    <p className="text-xs text-[#5C5A55]">Total Orders</p>
+                    <p className="mt-1 font-mono-tabular text-2xl font-semibold text-[#171716]">
+                      {analytics.totalOrders}
+                    </p>
                   </div>
-                ))
-              )}
-            </div>
-          )}
+                  <div className="p-4 bg-white border border-[#E5E3DC] rounded-xl">
+                    <p className="text-xs text-[#5C5A55]">Gross Revenue</p>
+                    <p className="mt-1 font-mono-tabular text-2xl font-semibold text-[#171716]">
+                      {formatMoney(analytics.totalRevenue, settings.currency)}
+                    </p>
+                  </div>
+                  <div className="p-4 bg-white border border-[#E5E3DC] rounded-xl">
+                    <p className="text-xs text-[#5C5A55]">Avg Order Value</p>
+                    <p className="mt-1 font-mono-tabular text-2xl font-semibold text-[#171716]">
+                      {formatMoney(analytics.averageOrderValue, settings.currency)}
+                    </p>
+                  </div>
+                  <div className="p-4 bg-white border border-[#E5E3DC] rounded-xl">
+                    <p className="text-xs text-[#5C5A55]">Pending Dispatch / UPI</p>
+                    <p className="mt-1 font-mono-tabular text-2xl font-semibold text-[#9A3412]">
+                      {analytics.activeDispatchCount}
+                      <span className="text-xs font-normal text-[#5C5A55] ml-1.5">
+                        ({analytics.pendingUpiReviews} UPI)
+                      </span>
+                    </p>
+                  </div>
+                </div>
+
+                {/* Order Filter & Search Toolbar */}
+                <div className="p-3.5 bg-white border border-[#E5E3DC] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="inline-flex flex-wrap items-center gap-1 p-1 rounded-lg bg-[#FAF9F6] border border-[#E5E3DC]">
+                    {(
+                      [
+                        { id: 'all', label: 'All Orders' },
+                        { id: 'active', label: 'Active Dispatch' },
+                        { id: 'upi_pending', label: 'UPI Review' },
+                        { id: 'delivered', label: 'Delivered' },
+                      ] as { id: OrderConsoleFilter; label: string }[]
+                    ).map((f) => (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => setOrderConsoleFilter(f.id)}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                          orderConsoleFilter === f.id
+                            ? 'bg-[#171716] text-white'
+                            : 'text-[#5C5A55] hover:text-[#171716]'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="relative flex-1 sm:max-w-xs">
+                    <Search className="w-3.5 h-3.5 text-[#5C5A55] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="search"
+                      value={orderSearchQuery}
+                      onChange={(e) => setOrderSearchQuery(e.target.value)}
+                      placeholder="Search order ID, name, phone..."
+                      aria-label="Filter orders"
+                      className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#FAF9F6] border border-[#D8D5CC] rounded-lg focus:outline-none focus:border-[#9A3412]"
+                    />
+                  </div>
+                </div>
+
+                {filteredConsoleOrders.length === 0 ? (
+                  <div className="p-8 bg-white border border-[#E5E3DC] rounded-xl text-center text-sm text-[#5C5A55]">
+                    {orders.length === 0
+                      ? 'No customer orders have been placed yet. Incoming orders will appear here live.'
+                      : 'No orders match the current filter or search query.'}
+                  </div>
+                ) : (
+                  filteredConsoleOrders.map((order) => (
+                    <div
+                      key={order.id}
+                      className="p-5 bg-white border border-[#E5E3DC] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-[#5C5A55]">
+                          <span className="font-mono-tabular font-semibold text-[#171716]">
+                            #{order.id}
+                          </span>
+                          <span aria-hidden="true">·</span>
+                          <span>
+                            {order.deliveryDay}, {order.deliveryWindow}
+                          </span>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-medium text-[#9A3412]">
+                            {STAGE_LABELS[order.stage]}
+                          </span>
+                          <span aria-hidden="true">·</span>
+                          <span
+                            className={
+                              order.paymentStatus === 'verified' || order.paymentStatus === 'paid'
+                                ? 'font-medium text-[#166534]'
+                                : order.paymentStatus === 'verification_pending'
+                                  ? 'font-medium text-[#92400E]'
+                                  : 'text-[#5C5A55]'
+                            }
+                          >
+                            {PAYMENT_LABELS[order.paymentMethod]} (
+                            {PAYMENT_STATUS_LABELS[order.paymentStatus ?? 'pending']})
+                          </span>
+                        </div>
+                        <p className="text-sm font-semibold text-[#171716]">
+                          {order.customer.fullName} ({order.customer.phone}) — {order.customer.streetAddress} ({order.customer.postalCode})
+                        </p>
+                        <p className="text-xs text-[#5C5A55]">
+                          {order.items.map((i) => `${i.quantity}× ${i.name}`).join(', ')} ·{' '}
+                          <span className="font-mono-tabular font-medium text-[#171716]">
+                            {formatMoney(order.total, settings.currency)}
+                          </span>
+                          {order.upiReference && (
+                            <>
+                              {' · '}
+                              <span className="font-mono-tabular text-[#171716]">
+                                UTR: {order.upiReference}
+                              </span>
+                            </>
+                          )}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {order.paymentStatus !== 'verified' && order.paymentStatus !== 'paid' && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void onUpdatePaymentStatus(
+                                order.id,
+                                order.paymentMethod === 'upi_prepaid' ? 'verified' : 'paid'
+                              )
+                            }
+                            className="px-3.5 py-2 text-xs font-medium text-[#166534] bg-[#F0FDF4] hover:bg-[#DCFCE7] border border-[#BBF7D0] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                          >
+                            {order.paymentMethod === 'upi_prepaid' ? 'Confirm UPI Paid' : 'Mark Paid'}
+                          </button>
+                        )}
+                        {order.stage !== 'delivered' && (
+                          <button
+                            type="button"
+                            onClick={() => void onAdvanceOrderStage(order.id)}
+                            className="px-4 py-2 text-xs font-medium text-white bg-[#171716] hover:bg-[#33322E] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                          >
+                            Advance Stage
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            );
+          })()}
 
           {/* TAB 4: SETTINGS */}
           {activeTab === 'settings' && (
@@ -1839,12 +1903,12 @@ export function OwnerStudioModal({
                     value={newOwnerLabel}
                     onChange={(e) => setNewOwnerLabel(e.target.value)}
                     placeholder="Role / Name (optional, e.g., Manager)"
-                    className="sm:col-span-4 px-3 py-2 text-sm bg-white border border-[#D8D5CC] rounded-lg focus:outline-none focus:border-[#B91C1C]"
+                    className="sm:col-span-4 px-3 py-2 text-sm bg-white border border-[#D6D0C4] rounded-lg focus:outline-none focus:border-[#9A3412]"
                   />
                   <button
                     type="submit"
                     disabled={savingBusy}
-                    className="sm:col-span-2 px-4 py-2 text-xs font-medium bg-[#B91C1C] hover:bg-[#991B1B] disabled:opacity-60 text-white rounded-lg cursor-pointer whitespace-nowrap"
+                    className="sm:col-span-2 px-4 py-2 text-xs font-medium bg-[#9A3412] hover:bg-[#7C2D12] disabled:opacity-60 text-white rounded-lg cursor-pointer whitespace-nowrap"
                   >
                     {savingBusy ? 'Adding...' : 'Add Owner'}
                   </button>
@@ -1852,24 +1916,24 @@ export function OwnerStudioModal({
               </form>
 
               <div className="space-y-2.5">
-                <p className="text-xs font-medium text-[#5C5A55]">Current Owners</p>
+                <p className="text-xs font-medium text-[#57534E]">Current Owners</p>
                 {BOOTSTRAPPED_OWNER_EMAILS.map((email) => (
                   <div
                     key={email}
-                    className="p-3.5 rounded-lg bg-[#FAF9F6] border border-[#E5E3DC] flex items-center justify-between gap-3 text-xs"
+                    className="p-3.5 rounded-lg bg-[#FAFAF7] border border-[#E4DFD5] flex items-center justify-between gap-3 text-xs"
                   >
                     <div>
-                      <span className="font-mono-tabular font-semibold text-[#171716]">
+                      <span className="font-mono-tabular font-semibold text-[#1C1917]">
                         {email}
                       </span>
                       {currentUserEmail.toLowerCase() === email && (
                         <>
-                          <span className="mx-2 text-[#C9C5BA]">·</span>
+                          <span className="mx-2 text-[#D6D0C4]">·</span>
                           <span className="text-[#166534] font-medium">Signed in now</span>
                         </>
                       )}
                     </div>
-                    <span className="text-[#B91C1C] font-medium">Primary Owner</span>
+                    <span className="text-[#9A3412] font-medium">Primary Owner</span>
                   </div>
                 ))}
 

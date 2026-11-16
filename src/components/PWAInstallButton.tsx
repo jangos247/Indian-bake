@@ -15,9 +15,9 @@ export function PWAInstallButton() {
       <button
         type="button"
         onClick={() => void install()}
-        className="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium text-[#171716] bg-white border border-[#D8D5CC] hover:border-[#171716] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+        className="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium text-[#1C1917] bg-white border border-[#D6D0C4] hover:border-[#1C1917] rounded-xl transition-colors cursor-pointer whitespace-nowrap"
       >
-        <Download className="w-4 h-4 text-[#B91C1C]" />
+        <Download className="w-4 h-4 text-[#9A3412]" />
         <span>Install App</span>
       </button>
     );
@@ -29,9 +29,9 @@ export function PWAInstallButton() {
         <button
           type="button"
           onClick={() => setShowIOSGuide(true)}
-          className="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium text-[#171716] bg-white border border-[#D8D5CC] hover:border-[#171716] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+          className="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium text-[#1C1917] bg-white border border-[#D6D0C4] hover:border-[#1C1917] rounded-xl transition-colors cursor-pointer whitespace-nowrap"
         >
-          <Share className="w-4 h-4 text-[#B91C1C]" />
+          <Share className="w-4 h-4 text-[#9A3412]" />
           <span>Install on iPhone</span>
         </button>
 
@@ -43,23 +43,23 @@ export function PWAInstallButton() {
             onClick={() => setShowIOSGuide(false)}
           >
             <div
-              className="w-full max-w-sm rounded-xl bg-[#FAF9F6] border border-[#E5E3DC] p-6 shadow-xl"
+              className="w-full max-w-sm rounded-2xl bg-[#FAFAF7] border border-[#E4DFD5] p-6 shadow-xl"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between">
-                <h3 className="font-display text-lg font-semibold text-[#171716]">
+                <h3 className="font-display text-lg font-semibold text-[#1C1917]">
                   Install IBC Bakery App
                 </h3>
                 <button
                   type="button"
                   onClick={() => setShowIOSGuide(false)}
                   aria-label="Close install instructions"
-                  className="p-1.5 rounded-lg text-[#5C5A55] hover:bg-[#F3F2EE] cursor-pointer"
+                  className="p-1.5 rounded-lg text-[#57534E] hover:bg-[#F2EFE9] cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
-              <p className="mt-3 text-sm text-[#46443F] leading-relaxed">
+              <p className="mt-3 text-sm text-[#57534E] leading-relaxed">
                 1. Tap the <strong>Share</strong> button in your Safari toolbar.
                 <br />
                 2. Scroll down and tap <strong>Add to Home Screen</strong>.
@@ -67,7 +67,7 @@ export function PWAInstallButton() {
               <button
                 type="button"
                 onClick={() => setShowIOSGuide(false)}
-                className="mt-5 w-full rounded-lg bg-[#B91C1C] hover:bg-[#991B1B] py-2.5 text-sm font-medium text-white transition-colors cursor-pointer"
+                className="mt-5 w-full rounded-xl bg-[#9A3412] hover:bg-[#7C2D12] py-2.5 text-sm font-medium text-white transition-colors cursor-pointer"
               >
                 Got it
               </button>
