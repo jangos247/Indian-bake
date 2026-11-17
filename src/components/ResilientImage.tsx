@@ -6,9 +6,15 @@ interface ResilientImageProps {
   src: string;
   alt: string;
   className?: string;
+  priority?: boolean;
 }
 
-export function ResilientImage({ src, alt, className = '' }: ResilientImageProps) {
+export function ResilientImage({
+  src,
+  alt,
+  className = '',
+  priority = false,
+}: ResilientImageProps) {
   const resolvedSrc = resolveBakeryImageUrl(src);
   const [hasError, setHasError] = useState(false);
 
@@ -35,6 +41,8 @@ export function ResilientImage({ src, alt, className = '' }: ResilientImageProps
     <img
       src={resolvedSrc}
       alt={alt}
+      loading={priority ? 'eager' : 'lazy'}
+      decoding="async"
       referrerPolicy="no-referrer"
       onError={() => setHasError(true)}
       className={className}

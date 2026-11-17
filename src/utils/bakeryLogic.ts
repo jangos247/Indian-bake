@@ -130,6 +130,8 @@ export function filterAndSortProducts(params: {
   selectedCategory: 'All' | BakeryCategory;
   dietaryFilter: DietaryFilter;
   spotlightFilter?: SpotlightFilter;
+  offersOnly?: boolean;
+  maxPrice?: number | null;
   searchQuery: string;
   sortBy?: SortOption;
   reviewsByProduct?: Record<string, ProductReview[]>;
@@ -139,6 +141,8 @@ export function filterAndSortProducts(params: {
     selectedCategory,
     dietaryFilter,
     spotlightFilter = 'all',
+    offersOnly = false,
+    maxPrice = null,
     searchQuery,
     sortBy = 'featured',
     reviewsByProduct = {},
@@ -162,6 +166,13 @@ export function filterAndSortProducts(params: {
       (spotlightFilter === 'todays_special' && Boolean(product.isTodaysSpecial)) ||
       (spotlightFilter === 'recommended' && Boolean(product.isRecommended));
 
+    const hasOffer =
+      Boolean(product.offerLabel?.trim()) ||
+      (product.originalPrice !== undefined && product.originalPrice > product.price);
+    const matchesOffers = !offersOnly || hasOffer;
+
+    const matchesMaxPrice = maxPrice === null || product.price <= maxPrice;
+
     const matchesSearch =
       q === '' ||
       product.name.toLowerCase().includes(q) ||
@@ -169,7 +180,14 @@ export function filterAndSortProducts(params: {
       product.shortDescription.toLowerCase().includes(q) ||
       product.ingredients.some((ing) => ing.toLowerCase().includes(q));
 
-    return matchesCategory && matchesDietary && matchesSpotlight && matchesSearch;
+    return (
+      matchesCategory &&
+      matchesDietary &&
+      matchesSpotlight &&
+      matchesOffers &&
+      matchesMaxPrice &&
+      matchesSearch
+    );
   });
 
   if (sortBy === 'featured') {
@@ -183,6 +201,122 @@ export function filterAndSortProducts(params: {
     const ratingB = getProductRating(b, reviewsByProduct[b.id]).ratingValue;
     return ratingB - ratingA;
   });
+}
+
+export interface ReconciledCartResult {
+  syncedCart: CartItem[];
+  priceChangedCount: number;
+  unavailableItems: CartItem[];
+  hasChanges: boolean;
+}
+
+export function reconcileCartWithProducts(
+  cart: CartItem[],
+  products: Product[]
+): ReconciledCartResult {
+  if (cart.length === 0 || products.length === 0) {
+    return { syncedCart: cart, priceChangedCount: 0, unavailableItems: [], hasChanges: false };
+  }
+
+  const productMap = new Map(products.map((p) => [p.id, p]));
+  let priceChangedCount = 0;
+  let hasChanges = false;
+  const unavailableItems: CartItem[] = [];
+
+  const syncedCart = cart.map((item) => {
+    const live = productMap.get(item.productId);
+    if (!live || !live.inStock) {
+      unavailableItems.push(item);
+      return item;
+    }
+    const matchedOpt = live.options.find((o) => o.id === item.optionId) ?? live.options[0];
+    const liveUnitPrice = live.price + (matchedOpt?.priceDelta ?? 0);
+    const liveOptionLabel = matchedOpt?.label ?? item.optionLabel;
+
+    if (liveUnitPrice !== item.unitPrice) {
+      priceChangedCount += 1;
+      hasChanges = true;
+    }
+    if (
+      live.name !== item.name ||
+      live.image !== item.image ||
+      liveOptionLabel !== item.optionLabel
+    ) {
+      hasChanges = true;
+    }
+
+    return {
+      ...item,
+      name: live.name,
+      image: live.image,
+      optionLabel: liveOptionLabel,
+      unitPrice: liveUnitPrice,
+    };
+  });
+
+  return { syncedCart, priceChangedCount, unavailableItems, hasChanges };
+}
+
+export function getSmartCartUpsells(
+  cart: CartItem[],
+  products: Product[],
+  limit = 3
+): Product[] {
+  const cartProductIds = new Set(cart.map((item) => item.productId));
+  return products
+    .filter(
+      (p) =>
+        p.inStock &&
+        !cartProductIds.has(p.id) &&
+        !p.isCakeCustomizable &&
+        normalizeCategory(p.category) !== 'Cakes'
+    )
+    .sort((a, b) => {
+      const scoreA =
+        (a.isBestSeller ? 3 : 0) +
+        (a.isRecommended ? 2 : 0) +
+        (normalizeCategory(a.category) === 'Beverages' ||
+        normalizeCategory(a.category) === 'Cookies & Biscuits'
+          ? 2
+          : 0);
+      const scoreB =
+        (b.isBestSeller ? 3 : 0) +
+        (b.isRecommended ? 2 : 0) +
+        (normalizeCategory(b.category) === 'Beverages' ||
+        normalizeCategory(b.category) === 'Cookies & Biscuits'
+          ? 2
+          : 0);
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      return a.price - b.price;
+    })
+    .slice(0, limit);
+}
+
+export function computeCartSavings(
+  cart: CartItem[],
+  products: Product[],
+  promoDiscount: number
+): { mrpSavings: number; promoSavings: number; totalSavings: number } {
+  const productMap = new Map(products.map((p) => [p.id, p]));
+  let mrpSavings = 0;
+
+  for (const item of cart) {
+    const prod = productMap.get(item.productId);
+    if (prod && prod.originalPrice !== undefined && prod.originalPrice > prod.price) {
+      mrpSavings += (prod.originalPrice - prod.price) * item.quantity;
+    }
+  }
+
+  const safePromo = Math.max(0, promoDiscount);
+  return {
+    mrpSavings,
+    promoSavings: safePromo,
+    totalSavings: mrpSavings + safePromo,
+  };
+}
+
+export function sanitizeText(value: string, maxLength: number): string {
+  return value.replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
 
 export interface OwnerAnalytics {

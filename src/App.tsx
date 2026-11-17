@@ -1,4 +1,14 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import {
+  FormEvent,
+  lazy,
+  Suspense,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import {
   collection,
@@ -21,6 +31,7 @@ import {
   BookmarkPlus,
   Building2,
   Clock,
+  Flame,
   Heart,
   LogOut,
   MapPin,
@@ -35,13 +46,9 @@ import {
   WifiOff,
   X,
 } from 'lucide-react';
-import { AuthModal } from './components/AuthModal';
 import { AppTab, BottomNav } from './components/BottomNav';
 import { CartCheckoutDrawer } from './components/CartCheckoutDrawer';
-import { CorporateQuoteModal } from './components/CorporateQuoteModal';
 import { Header } from './components/Header';
-import { OrderTrackerContent, OrderTrackerModal } from './components/OrderTrackerModal';
-import { OwnerStudioModal } from './components/OwnerStudioModal';
 import { ProductCard } from './components/ProductCard';
 import { ProductModal } from './components/ProductModal';
 import { PWAInstallButton } from './components/PWAInstallButton';
@@ -81,12 +88,31 @@ import {
   SavedAddress,
 } from './types/bakery';
 import {
+  calculateCartSummary,
   DietaryFilter,
   filterAndSortProducts,
   getProductRating,
+  reconcileCartWithProducts,
+  sanitizeText,
   SortOption,
   SpotlightFilter,
 } from './utils/bakeryLogic';
+
+const AuthModal = lazy(() =>
+  import('./components/AuthModal').then((m) => ({ default: m.AuthModal }))
+);
+const CorporateQuoteModal = lazy(() =>
+  import('./components/CorporateQuoteModal').then((m) => ({ default: m.CorporateQuoteModal }))
+);
+const OrderTrackerContent = lazy(() =>
+  import('./components/OrderTrackerModal').then((m) => ({ default: m.OrderTrackerContent }))
+);
+const OrderTrackerModal = lazy(() =>
+  import('./components/OrderTrackerModal').then((m) => ({ default: m.OrderTrackerModal }))
+);
+const OwnerStudioModal = lazy(() =>
+  import('./components/OwnerStudioModal').then((m) => ({ default: m.OwnerStudioModal }))
+);
 
 const STORAGE_CART_KEY = 'ibc_bakery_cart_v1';
 const STORAGE_WISHLIST_KEY = 'ibc_bakery_wishlist_v1';
@@ -191,8 +217,13 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState<'All' | BakeryCategory>('All');
   const [dietaryFilter, setDietaryFilter] = useState<DietaryFilter>('All');
   const [spotlightFilter, setSpotlightFilter] = useState<SpotlightFilter>('all');
+  const [offersOnly, setOffersOnly] = useState(false);
+  const [under200Only, setUnder200Only] = useState(false);
   const [sortBy, setSortBy] = useState<SortOption>('featured');
   const [searchQuery, setSearchQuery] = useState('');
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const [searchDropdownOpen, setSearchDropdownOpen] = useState(false);
+  const homeSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   const [postalCode, setPostalCode] = useState('522503');
   const [deliveryDay, setDeliveryDay] = useState<'Today' | 'Tomorrow'>('Today');
@@ -246,6 +277,57 @@ export default function App() {
       // Ignore storage quota errors
     }
   }, [guestWishlist]);
+
+  // Reconcile persisted cart items with live Firestore menu prices & stock
+  useEffect(() => {
+    if (cart.length === 0 || products.length === 0) return;
+    const { syncedCart, priceChangedCount, hasChanges } = reconcileCartWithProducts(
+      cart,
+      products
+    );
+    if (hasChanges) {
+      setCart(syncedCart);
+      if (priceChangedCount > 0) {
+        showToast('Cart prices updated to latest bakery menu pricing.', true);
+      }
+    }
+  }, [products]);
+
+  // '/' keyboard shortcut to jump to bakery search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSearchDropdownOpen(false);
+        return;
+      }
+      if (
+        e.key === '/' &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !isBagOpen &&
+        !activeProductId &&
+        !isOwnerStudioOpen &&
+        !isAuthModalOpen &&
+        !isCorporateQuoteOpen &&
+        !isTrackerOpen
+      ) {
+        const tag = (document.activeElement?.tagName ?? '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+        e.preventDefault();
+        homeSearchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    isBagOpen,
+    activeProductId,
+    isOwnerStudioOpen,
+    isAuthModalOpen,
+    isCorporateQuoteOpen,
+    isTrackerOpen,
+  ]);
 
   // Listen to Firebase Auth state
   useEffect(() => {
@@ -523,12 +605,57 @@ export default function App() {
         selectedCategory,
         dietaryFilter,
         spotlightFilter,
-        searchQuery,
+        offersOnly,
+        maxPrice: under200Only ? 200 : null,
+        searchQuery: deferredSearchQuery,
         sortBy,
         reviewsByProduct,
       }),
-    [products, selectedCategory, dietaryFilter, spotlightFilter, searchQuery, sortBy, reviewsByProduct]
+    [
+      products,
+      selectedCategory,
+      dietaryFilter,
+      spotlightFilter,
+      offersOnly,
+      under200Only,
+      deferredSearchQuery,
+      sortBy,
+      reviewsByProduct,
+    ]
   );
+
+  const searchSuggestions = useMemo(() => {
+    const q = deferredSearchQuery.trim().toLowerCase();
+    if (!q) return [];
+    return products
+      .filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          normalizeCategory(p.category).toLowerCase().includes(q) ||
+          p.ingredients.some((ing) => ing.toLowerCase().includes(q))
+      )
+      .slice(0, 5);
+  }, [products, deferredSearchQuery]);
+
+  const unavailableProductIds = useMemo(() => {
+    const productMap = new Map(products.map((p) => [p.id, p]));
+    const ids = new Set<string>();
+    for (const item of cart) {
+      const live = productMap.get(item.productId);
+      if (!live || !live.inStock) {
+        ids.add(item.productId);
+      }
+    }
+    return ids;
+  }, [cart, products]);
+
+  const cartQuantityByProductId = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const item of cart) {
+      map[item.productId] = (map[item.productId] ?? 0) + item.quantity;
+    }
+    return map;
+  }, [cart]);
 
   const showcaseVoices = useMemo(() => {
     const liveWithText = reviews
@@ -567,7 +694,9 @@ export default function App() {
 
   const bagCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const bagSubtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
-  const activeOrdersCount = orders.filter((o) => o.stage !== 'delivered').length;
+  const activeOrders = orders.filter((o) => o.stage !== 'delivered');
+  const activeOrdersCount = activeOrders.length;
+  const activeLiveOrder = activeOrders[0];
   const deliveryZone = resolveDeliveryZone(postalCode, settings);
   const activeSlot =
     settings.deliverySlots.find((s) => s.id === selectedSlotId) ??
@@ -634,12 +763,46 @@ export default function App() {
     }, 1200);
   };
 
-  const handleQuickAdd = (product: Product) => {
+  const handleQuickAdd = useCallback((product: Product) => {
     const defaultOption = product.options[0];
     if (defaultOption) {
       handleAddToCart(product, defaultOption.id, 1);
     }
-  };
+  }, []);
+
+  const handleStepCartQuantity = useCallback((product: Product, delta: number) => {
+    const defaultOption = product.options[0];
+    if (!defaultOption) return;
+    const defaultCartItemId = `${product.id}::${defaultOption.id}`;
+
+    setCart((prev) => {
+      const targetItem =
+        prev.find((i) => i.cartItemId === defaultCartItemId) ??
+        prev.find((i) => i.productId === product.id);
+      if (!targetItem) {
+        if (delta <= 0 || !product.inStock) return prev;
+        return [
+          ...prev,
+          {
+            cartItemId: defaultCartItemId,
+            productId: product.id,
+            name: product.name,
+            category: product.category,
+            image: product.image,
+            optionId: defaultOption.id,
+            optionLabel: defaultOption.label,
+            unitPrice: product.price + defaultOption.priceDelta,
+            quantity: delta,
+          },
+        ];
+      }
+      return prev
+        .map((i) =>
+          i.cartItemId === targetItem.cartItemId ? { ...i, quantity: i.quantity + delta } : i
+        )
+        .filter((i) => i.quantity > 0);
+    });
+  }, []);
 
   const handleUpdateQuantity = (cartItemId: string, delta: number) => {
     setCart((prev) =>
@@ -655,6 +818,11 @@ export default function App() {
 
   const handleRemoveItem = (cartItemId: string) => {
     setCart((prev) => prev.filter((item) => item.cartItemId !== cartItemId));
+  };
+
+  const handleRemoveUnavailableItems = () => {
+    setCart((prev) => prev.filter((item) => !unavailableProductIds.has(item.productId)));
+    showToast('Removed sold-out items from cart.');
   };
 
   const handleToggleWishlist = async (productId: string) => {
@@ -691,12 +859,18 @@ export default function App() {
     if (!user) return;
     const currentList = customerProfile?.savedAddresses ?? [];
     const newAddr: SavedAddress = {
-      ...addr,
       id: `addr-${Date.now()}`,
+      label: sanitizeText(addr.label, 30) || 'Home',
+      fullName: sanitizeText(addr.fullName, 80),
+      phone: sanitizeText(addr.phone, 24),
+      streetAddress: sanitizeText(addr.streetAddress, 160),
+      apartment: sanitizeText(addr.apartment, 60),
+      postalCode: sanitizeText(addr.postalCode, 16),
+      instructions: sanitizeText(addr.instructions, 200),
     };
     const deduplicated = currentList.filter(
       (a) =>
-        a.streetAddress.trim().toLowerCase() !== addr.streetAddress.trim().toLowerCase()
+        a.streetAddress.trim().toLowerCase() !== newAddr.streetAddress.toLowerCase()
     );
     const updatedAddresses = [newAddr, ...deduplicated].slice(0, 10);
     try {
@@ -705,7 +879,8 @@ export default function App() {
         {
           uid: user.uid,
           email: resolvedUserEmail,
-          fullName: customerProfile?.fullName || addr.fullName || user.displayName || 'Customer',
+          fullName:
+            sanitizeText(customerProfile?.fullName || newAddr.fullName || user.displayName || 'Customer', 80),
           savedAddresses: updatedAddresses,
           updatedAt: serverTimestamp(),
         },
@@ -738,15 +913,18 @@ export default function App() {
 
   const handleSubmitReview = async (productId: string, rating: number, comment: string) => {
     if (!user) return;
+    const cleanComment = sanitizeText(comment, 400);
+    if (!cleanComment) return;
+    const clampedRating = Math.max(1, Math.min(5, Math.round(rating)));
     const reviewId = `rev-${Date.now()}-${Math.floor(Math.random() * 999)}`;
     try {
       await setDoc(doc(db, 'reviews', reviewId), {
         id: reviewId,
-        productId,
+        productId: sanitizeText(productId, 80),
         authorId: user.uid,
-        authorName: user.displayName || customerProfile?.fullName || 'Customer',
-        rating,
-        comment,
+        authorName: sanitizeText(user.displayName || customerProfile?.fullName || 'Customer', 80),
+        rating: clampedRating,
+        comment: cleanComment,
         createdAt: serverTimestamp(),
       });
     } catch (err) {
@@ -762,18 +940,82 @@ export default function App() {
       return;
     }
 
+    // Authoritative pre-flight integrity verification against live menu catalog & rules
+    const productMap = new Map(products.map((p) => [p.id, p]));
+    const verifiedItems: CartItem[] = [];
+    for (const item of orderInput.items) {
+      const liveProd = productMap.get(item.productId);
+      if (!liveProd || !liveProd.inStock) {
+        throw new Error(`"${item.name}" is currently sold out. Please update your cart.`);
+      }
+      const matchedOpt =
+        liveProd.options.find((o) => o.id === item.optionId) ?? liveProd.options[0];
+      const safeQty = Math.max(1, Math.min(100, Math.round(item.quantity)));
+      verifiedItems.push({
+        ...item,
+        name: sanitizeText(liveProd.name, 100),
+        optionLabel: sanitizeText(matchedOpt?.label ?? item.optionLabel, 40),
+        unitPrice: liveProd.price + (matchedOpt?.priceDelta ?? 0),
+        quantity: safeQty,
+      });
+    }
+
+    const cleanPin = sanitizeText(orderInput.customer.postalCode, 16);
+    const zone = resolveDeliveryZone(cleanPin, settings);
+    const verifiedPricing = calculateCartSummary({
+      items: verifiedItems,
+      settings,
+      appliedPromoCode: orderInput.promoCode ?? '',
+      zoneFee: zone.fee,
+      tip: Math.max(0, orderInput.tip),
+    });
+
+    const sanitizedCustomer = {
+      fullName: sanitizeText(orderInput.customer.fullName, 80),
+      phone: sanitizeText(orderInput.customer.phone, 24),
+      streetAddress: sanitizeText(orderInput.customer.streetAddress, 160),
+      apartment: sanitizeText(orderInput.customer.apartment, 60),
+      postalCode: cleanPin,
+      instructions: sanitizeText(orderInput.customer.instructions, 200),
+    };
+
     const orderPayload: Record<string, unknown> = {
-      ...orderInput,
+      id: sanitizeText(orderInput.id, 40),
+      createdAtLabel: sanitizeText(orderInput.createdAtLabel, 40),
+      deliveryDay: orderInput.deliveryDay,
+      deliveryWindow: sanitizeText(orderInput.deliveryWindow, 40),
+      neighborhood: sanitizeText(zone.neighborhood, 100),
+      customer: sanitizedCustomer,
+      paymentMethod: orderInput.paymentMethod,
+      paymentStatus: orderInput.paymentStatus ?? 'pending',
+      items: verifiedItems,
+      subtotal: verifiedPricing.subtotal,
+      deliveryFee: verifiedPricing.deliveryFee,
+      tip: Math.max(0, orderInput.tip),
+      total: verifiedPricing.total,
+      stage: 'confirmed',
+      courierName: sanitizeText(orderInput.courierName, 80) || 'Assigned upon dispatch',
       customerId: user.uid,
       customerEmail: resolvedUserEmail,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
-    if (!orderInput.discount) delete orderPayload.discount;
-    if (!orderInput.promoCode) delete orderPayload.promoCode;
-    if (!orderInput.tax) delete orderPayload.tax;
-    if (!orderInput.note) delete orderPayload.note;
-    if (!orderInput.upiReference) delete orderPayload.upiReference;
+
+    if (verifiedPricing.discount > 0 && verifiedPricing.appliedOfferCode) {
+      orderPayload.discount = verifiedPricing.discount;
+      orderPayload.promoCode = sanitizeText(verifiedPricing.appliedOfferCode, 30);
+    }
+    if (verifiedPricing.taxAmount > 0) {
+      orderPayload.tax = verifiedPricing.taxAmount;
+    }
+    if (orderInput.note) {
+      const cleanNote = sanitizeText(orderInput.note, 240);
+      if (cleanNote) orderPayload.note = cleanNote;
+    }
+    if (orderInput.upiReference) {
+      const cleanUtr = sanitizeText(orderInput.upiReference, 40);
+      if (cleanUtr) orderPayload.upiReference = cleanUtr;
+    }
 
     try {
       await setDoc(doc(db, 'orders', orderInput.id), orderPayload);
@@ -787,12 +1029,12 @@ export default function App() {
         {
           uid: user.uid,
           email: resolvedUserEmail,
-          fullName: orderInput.customer.fullName,
-          phone: orderInput.customer.phone,
-          streetAddress: orderInput.customer.streetAddress,
-          apartment: orderInput.customer.apartment,
-          postalCode: orderInput.customer.postalCode,
-          instructions: orderInput.customer.instructions,
+          fullName: sanitizedCustomer.fullName,
+          phone: sanitizedCustomer.phone,
+          streetAddress: sanitizedCustomer.streetAddress,
+          apartment: sanitizedCustomer.apartment,
+          postalCode: sanitizedCustomer.postalCode,
+          instructions: sanitizedCustomer.instructions,
           updatedAt: serverTimestamp(),
         },
         { merge: true }
@@ -989,6 +1231,10 @@ export default function App() {
     setShowNewAddressForm(false);
   };
 
+  const handleOpenProductByProd = useCallback((prod: Product) => {
+    setActiveProductId(prod.id);
+  }, []);
+
   const renderProductGrid = (list: Product[]) => (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-7">
       {list.map((product) => {
@@ -1000,10 +1246,12 @@ export default function App() {
             currency={settings.currency}
             isWishlisted={wishlistIds.includes(product.id)}
             isJustAdded={justAddedId === product.id}
+            cartQuantity={cartQuantityByProductId[product.id] ?? 0}
             ratingValue={stats.ratingValue}
             reviewCount={stats.reviewCount}
-            onOpenProduct={(prod) => setActiveProductId(prod.id)}
+            onOpenProduct={handleOpenProductByProd}
             onQuickAdd={handleQuickAdd}
+            onStepCartQuantity={handleStepCartQuantity}
             onToggleWishlist={(id) => void handleToggleWishlist(id)}
           />
         );
@@ -1114,13 +1362,104 @@ export default function App() {
                 <div className="relative flex-1 md:max-w-md">
                   <Search className="w-4 h-4 text-[#57534E] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
+                    ref={homeSearchInputRef}
                     type="search"
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onFocus={() => setSearchDropdownOpen(true)}
+                    onBlur={() => window.setTimeout(() => setSearchDropdownOpen(false), 180)}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setSearchDropdownOpen(true);
+                    }}
                     placeholder="Search cakes, puffs, Osmania biscuits, chai..."
                     aria-label="Search cakes, snacks, sweets"
-                    className="w-full pl-10 pr-4 py-2 text-sm bg-[#FAFAF7] border border-[#D6D0C4] rounded-xl text-[#1C1917] placeholder:text-[#78716C] focus:outline-none focus:border-[#9A3412]"
+                    className="w-full pl-10 pr-16 py-2 text-sm bg-[#FAFAF7] border border-[#D6D0C4] rounded-xl text-[#1C1917] placeholder:text-[#78716C] focus:outline-none focus:border-[#9A3412]"
                   />
+                  {searchQuery ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery('');
+                        homeSearchInputRef.current?.focus();
+                      }}
+                      aria-label="Clear search query"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-md text-[#57534E] hover:text-[#1C1917] cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  ) : (
+                    <kbd
+                      aria-hidden="true"
+                      className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono-tabular text-[#78716C] bg-white border border-[#E4DFD5] rounded absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                    >
+                      /
+                    </kbd>
+                  )}
+
+                  {/* Instant Search Autocomplete Dropdown */}
+                  {searchDropdownOpen && searchQuery.trim().length > 0 && (
+                    <div
+                      role="listbox"
+                      aria-label="Instant bakery search results"
+                      className="absolute left-0 right-0 top-full mt-2 z-40 bg-white border border-[#E4DFD5] rounded-2xl shadow-xl overflow-hidden"
+                    >
+                      {searchSuggestions.length === 0 ? (
+                        <div className="p-4 text-xs text-[#57534E]">
+                          No items matching &ldquo;{searchQuery}&rdquo;. Try cake, puff, cookies, or chai.
+                        </div>
+                      ) : (
+                        <ul className="divide-y divide-[#F2EFE9]">
+                          {searchSuggestions.map((prod) => (
+                            <li
+                              key={prod.id}
+                              className="p-2.5 hover:bg-[#FAF5EE] flex items-center justify-between gap-3"
+                            >
+                              <button
+                                type="button"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  setActiveProductId(prod.id);
+                                  setSearchDropdownOpen(false);
+                                }}
+                                className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer"
+                              >
+                                <div className="w-10 h-10 rounded-lg overflow-hidden bg-[#F2EFE9] shrink-0">
+                                  <ResilientImage
+                                    src={prod.image}
+                                    alt={prod.name}
+                                    className="w-full h-full object-cover"
+                                  />
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="text-xs font-semibold text-[#1C1917] truncate">
+                                    {prod.name}
+                                  </p>
+                                  <p className="text-[11px] text-[#57534E] font-mono-tabular">
+                                    {normalizeCategory(prod.category)} ·{' '}
+                                    {formatMoney(prod.price, settings.currency)}
+                                  </p>
+                                </div>
+                              </button>
+                              {prod.inStock &&
+                                !prod.isCakeCustomizable &&
+                                normalizeCategory(prod.category) !== 'Cakes' && (
+                                  <button
+                                    type="button"
+                                    onMouseDown={(e) => {
+                                      e.preventDefault();
+                                      handleQuickAdd(prod);
+                                    }}
+                                    className="px-2.5 py-1 text-[11px] font-semibold bg-[#9A3412] text-white rounded-lg hover:bg-[#7C2D12] cursor-pointer shrink-0"
+                                  >
+                                    + Add
+                                  </button>
+                                )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1201,6 +1540,7 @@ export default function App() {
                     <ResilientImage
                       src={HERO_IMAGE}
                       alt="Freshly baked celebration cakes, Indian sweets, puffs, and bakery loaves"
+                      priority
                       className="w-full h-full object-cover"
                     />
                     <div className="absolute inset-x-0 bottom-0 p-5 bg-gradient-to-t from-[#1C1917]/85 via-[#1C1917]/40 to-transparent text-white flex items-end justify-between gap-4">
@@ -1368,21 +1708,72 @@ export default function App() {
               {/* Spotlight & Department Filter Toolbar */}
               <div className="mt-5 flex flex-col gap-3">
                 <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-[#F2EFE9] border border-[#E4DFD5] overflow-x-auto max-w-full">
-                    {SPOTLIGHT_TABS.map((tab) => (
+                  <div className="flex flex-wrap items-center gap-2 max-w-full">
+                    <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-[#F2EFE9] border border-[#E4DFD5] overflow-x-auto max-w-full">
+                      {SPOTLIGHT_TABS.map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setSpotlightFilter(tab.id)}
+                          className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                            spotlightFilter === tab.id
+                              ? 'bg-[#1C1917] text-white'
+                              : 'text-[#57534E] hover:text-[#1C1917]'
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      aria-pressed={offersOnly}
+                      onClick={() => setOffersOnly((prev) => !prev)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-xl border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                        offersOnly
+                          ? 'bg-[#9A3412] border-[#9A3412] text-white'
+                          : 'bg-white border-[#E4DFD5] text-[#57534E] hover:border-[#9A3412] hover:text-[#1C1917]'
+                      }`}
+                    >
+                      Offers Only
+                    </button>
+
+                    <button
+                      type="button"
+                      aria-pressed={under200Only}
+                      onClick={() => setUnder200Only((prev) => !prev)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-xl border transition-colors cursor-pointer whitespace-nowrap shrink-0 font-mono-tabular ${
+                        under200Only
+                          ? 'bg-[#1B4332] border-[#1B4332] text-white'
+                          : 'bg-white border-[#E4DFD5] text-[#57534E] hover:border-[#1B4332] hover:text-[#1C1917]'
+                      }`}
+                    >
+                      Under {settings.currency}200
+                    </button>
+
+                    {(selectedCategory !== 'All' ||
+                      dietaryFilter !== 'All' ||
+                      spotlightFilter !== 'all' ||
+                      offersOnly ||
+                      under200Only ||
+                      searchQuery !== '') && (
                       <button
-                        key={tab.id}
                         type="button"
-                        onClick={() => setSpotlightFilter(tab.id)}
-                        className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                          spotlightFilter === tab.id
-                            ? 'bg-[#1C1917] text-white'
-                            : 'text-[#57534E] hover:text-[#1C1917]'
-                        }`}
+                        onClick={() => {
+                          setSelectedCategory('All');
+                          setDietaryFilter('All');
+                          setSpotlightFilter('all');
+                          setOffersOnly(false);
+                          setUnder200Only(false);
+                          setSortBy('featured');
+                          setSearchQuery('');
+                        }}
+                        className="px-2.5 py-1.5 text-xs font-medium text-[#9A3412] hover:underline cursor-pointer whitespace-nowrap"
                       >
-                        {tab.label}
+                        Reset
                       </button>
-                    ))}
+                    )}
                   </div>
 
                   <button
@@ -1432,6 +1823,8 @@ export default function App() {
                       setSelectedCategory('All');
                       setDietaryFilter('All');
                       setSpotlightFilter('all');
+                      setOffersOnly(false);
+                      setUnder200Only(false);
                       setSortBy('featured');
                       setSearchQuery('');
                     }}
@@ -1698,20 +2091,22 @@ export default function App() {
               </p>
             </div>
 
-            <OrderTrackerContent
-              user={user}
-              isOwner={isOwner}
-              currency={settings.currency}
-              orders={orders}
-              activeOrderId={activeOrderId}
-              onSelectOrder={setActiveOrderId}
-              onAdvanceStage={handleAdvanceOrderStage}
-              onReorder={handleReorder}
-              onRequestSignIn={() => {
-                setAuthInitialMode('customer');
-                setIsAuthModalOpen(true);
-              }}
-            />
+            <Suspense fallback={<div className="py-12 text-center text-xs text-[#57534E]">Loading live order tracker...</div>}>
+              <OrderTrackerContent
+                user={user}
+                isOwner={isOwner}
+                currency={settings.currency}
+                orders={orders}
+                activeOrderId={activeOrderId}
+                onSelectOrder={setActiveOrderId}
+                onAdvanceStage={handleAdvanceOrderStage}
+                onReorder={handleReorder}
+                onRequestSignIn={() => {
+                  setAuthInitialMode('customer');
+                  setIsAuthModalOpen(true);
+                }}
+              />
+            </Suspense>
           </section>
         )}
 
@@ -2139,8 +2534,8 @@ export default function App() {
         activeOrdersCount={activeOrdersCount}
       />
 
-      {/* Mobile & Desktop Quick Cart Summary Bar */}
-      {bagCount > 0 && !isBagOpen && !activeProduct && !isOwnerStudioOpen && !isCorporateQuoteOpen && (
+      {/* Mobile & Desktop Quick Cart / Live Order Floating Bar */}
+      {bagCount > 0 && !isBagOpen && !activeProduct && !isOwnerStudioOpen && !isCorporateQuoteOpen ? (
         <div className="fixed bottom-[64px] md:bottom-5 left-4 right-4 md:left-auto md:right-6 md:w-80 z-30">
           <button
             type="button"
@@ -2164,7 +2559,39 @@ export default function App() {
             </span>
           </button>
         </div>
-      )}
+      ) : activeLiveOrder &&
+        activeTab !== 'orders' &&
+        !isBagOpen &&
+        !activeProduct &&
+        !isOwnerStudioOpen &&
+        !isTrackerOpen ? (
+        <div className="fixed bottom-[64px] md:bottom-5 left-4 right-4 md:left-auto md:right-6 md:w-84 z-30">
+          <button
+            type="button"
+            onClick={() => {
+              setActiveOrderId(activeLiveOrder.id);
+              setIsTrackerOpen(true);
+            }}
+            className="w-full min-h-[44px] px-4 py-2 bg-[#1B4332] hover:bg-[#143326] text-white rounded-xl shadow-lg flex items-center justify-between gap-3 cursor-pointer transition-colors"
+          >
+            <div className="flex items-center gap-2.5 text-left min-w-0">
+              <Flame className="w-4 h-4 text-[#FDBA74] shrink-0" />
+              <div className="min-w-0">
+                <p className="text-xs font-semibold truncate">
+                  Order #{activeLiveOrder.id} · Active
+                </p>
+                <p className="text-[11px] text-white/80 truncate">
+                  {activeLiveOrder.deliveryDay}, {activeLiveOrder.deliveryWindow}
+                </p>
+              </div>
+            </div>
+            <span className="inline-flex items-center gap-1 text-xs font-semibold bg-white/15 px-2.5 py-1 rounded-lg shrink-0">
+              <span>Track Live</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </span>
+          </button>
+        </div>
+      ) : null}
 
       {/* Action Feedback Toast */}
       {toastInfo && (
@@ -2222,6 +2649,8 @@ export default function App() {
         user={user}
         customerProfile={customerProfile}
         items={cart}
+        products={products}
+        unavailableProductIds={unavailableProductIds}
         settings={settings}
         appliedPromoCode={appliedPromoCode}
         onApplyPromoCode={setAppliedPromoCode}
@@ -2233,67 +2662,79 @@ export default function App() {
         onPostalCodeChange={setPostalCode}
         onUpdateQuantity={handleUpdateQuantity}
         onRemoveItem={handleRemoveItem}
+        onQuickAddProduct={handleQuickAdd}
+        onRemoveUnavailableItems={handleRemoveUnavailableItems}
         onRequestSignIn={() => setIsAuthModalOpen(true)}
         onSaveAddress={handleSaveAddress}
         onPlaceOrder={handlePlaceOrder}
       />
 
-      <OrderTrackerModal
-        isOpen={isTrackerOpen}
-        onClose={() => setIsTrackerOpen(false)}
-        user={user}
-        isOwner={isOwner}
-        currency={settings.currency}
-        orders={orders}
-        activeOrderId={activeOrderId}
-        onSelectOrder={setActiveOrderId}
-        onAdvanceStage={handleAdvanceOrderStage}
-        onReorder={handleReorder}
-        onRequestSignIn={() => setIsAuthModalOpen(true)}
-      />
+      <Suspense fallback={null}>
+        {isTrackerOpen && (
+          <OrderTrackerModal
+            isOpen={isTrackerOpen}
+            onClose={() => setIsTrackerOpen(false)}
+            user={user}
+            isOwner={isOwner}
+            currency={settings.currency}
+            orders={orders}
+            activeOrderId={activeOrderId}
+            onSelectOrder={setActiveOrderId}
+            onAdvanceStage={handleAdvanceOrderStage}
+            onReorder={handleReorder}
+            onRequestSignIn={() => setIsAuthModalOpen(true)}
+          />
+        )}
 
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        user={user}
-        isOwner={isOwner}
-        initialMode={authInitialMode}
-        onOpenOwnerStudio={() => setIsOwnerStudioOpen(true)}
-        onOpenOrders={() => {
-          setIsAuthModalOpen(false);
-          handleTabSwitch('orders');
-        }}
-      />
+        {isAuthModalOpen && (
+          <AuthModal
+            isOpen={isAuthModalOpen}
+            onClose={() => setIsAuthModalOpen(false)}
+            user={user}
+            isOwner={isOwner}
+            initialMode={authInitialMode}
+            onOpenOwnerStudio={() => setIsOwnerStudioOpen(true)}
+            onOpenOrders={() => {
+              setIsAuthModalOpen(false);
+              handleTabSwitch('orders');
+            }}
+          />
+        )}
 
-      <CorporateQuoteModal
-        isOpen={isCorporateQuoteOpen}
-        onClose={() => setIsCorporateQuoteOpen(false)}
-        settings={settings}
-      />
+        {isCorporateQuoteOpen && (
+          <CorporateQuoteModal
+            isOpen={isCorporateQuoteOpen}
+            onClose={() => setIsCorporateQuoteOpen(false)}
+            settings={settings}
+          />
+        )}
 
-      <OwnerStudioModal
-        isOpen={isOwnerStudioOpen}
-        onClose={() => setIsOwnerStudioOpen(false)}
-        isOwner={isOwner}
-        onRequestOwnerSignIn={() => {
-          setAuthInitialMode('owner');
-          setIsAuthModalOpen(true);
-        }}
-        products={products}
-        onSaveProduct={handleSaveProduct}
-        onDeleteProduct={handleDeleteProduct}
-        onToggleStock={handleToggleStock}
-        onResetDefaults={handleResetDefaults}
-        settings={settings}
-        onUpdateSettings={handleUpdateSettings}
-        orders={orders}
-        onAdvanceOrderStage={handleAdvanceOrderStage}
-        onUpdatePaymentStatus={handleUpdatePaymentStatus}
-        owners={ownersList}
-        currentUserEmail={resolvedUserEmail}
-        onAddOwner={handleAddOwner}
-        onRemoveOwner={handleRemoveOwner}
-      />
+        {isOwnerStudioOpen && (
+          <OwnerStudioModal
+            isOpen={isOwnerStudioOpen}
+            onClose={() => setIsOwnerStudioOpen(false)}
+            isOwner={isOwner}
+            onRequestOwnerSignIn={() => {
+              setAuthInitialMode('owner');
+              setIsAuthModalOpen(true);
+            }}
+            products={products}
+            onSaveProduct={handleSaveProduct}
+            onDeleteProduct={handleDeleteProduct}
+            onToggleStock={handleToggleStock}
+            onResetDefaults={handleResetDefaults}
+            settings={settings}
+            onUpdateSettings={handleUpdateSettings}
+            orders={orders}
+            onAdvanceOrderStage={handleAdvanceOrderStage}
+            onUpdatePaymentStatus={handleUpdatePaymentStatus}
+            owners={ownersList}
+            currentUserEmail={resolvedUserEmail}
+            onAddOwner={handleAddOwner}
+            onRemoveOwner={handleRemoveOwner}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

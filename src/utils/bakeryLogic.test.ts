@@ -2,9 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   calculateCartSummary,
+  computeCartSavings,
   computeOwnerAnalytics,
   filterAndSortProducts,
   filterOrdersForConsole,
+  getSmartCartUpsells,
+  reconcileCartWithProducts,
+  sanitizeText,
 } from './bakeryLogic';
 import { BakerySettings, CartItem, Order, Product } from '../types/bakery';
 
@@ -83,6 +87,8 @@ const sampleProducts: Product[] = [
     name: 'Belgian Truffle Cake',
     category: 'Cakes',
     price: 550,
+    originalPrice: 650,
+    offerLabel: 'Save ₹100',
     weight: '500g',
     bakeTime: '06:00',
     shortDescription: 'Rich dark chocolate sponge',
@@ -117,6 +123,27 @@ const sampleProducts: Product[] = [
     image: '',
     inStock: false,
     options: [{ id: 'std', label: '1 pc', priceDelta: 0, weightLabel: '120g' }],
+  },
+  {
+    id: 'p3',
+    name: 'Irani Chai Flask',
+    category: 'Beverages',
+    price: 120,
+    originalPrice: 150,
+    weight: '500ml',
+    bakeTime: 'Fresh',
+    shortDescription: 'Slow-brewed cardamom chai',
+    fullDescription: 'Authentic Hyderabad-style Irani chai',
+    ingredients: ['Milk', 'Tea', 'Cardamom'],
+    allergens: 'Dairy',
+    dietary: ['Vegetarian', 'Nut-Free'],
+    vegType: 'veg',
+    isRecommended: true,
+    rating: 4.9,
+    reheatTip: 'Serve hot',
+    image: '',
+    inStock: true,
+    options: [{ id: 'flask', label: '500ml Flask', priceDelta: 0, weightLabel: '500ml' }],
   },
 ];
 
@@ -210,7 +237,7 @@ test('calculateCartSummary unlocks free delivery when discounted subtotal meets 
   assert.equal(result.progressPct, 100);
 });
 
-test('filterAndSortProducts filters by category, spotlight, search, and sorts by price', () => {
+test('filterAndSortProducts filters by category, spotlight, offersOnly, maxPrice, search, and sorts by price', () => {
   const sortedAsc = filterAndSortProducts({
     products: sampleProducts,
     selectedCategory: 'All',
@@ -220,7 +247,7 @@ test('filterAndSortProducts filters by category, spotlight, search, and sorts by
   });
   assert.deepEqual(
     sortedAsc.map((p) => p.id),
-    ['p2', 'p1']
+    ['p2', 'p3', 'p1']
   );
 
   const specials = filterAndSortProducts({
@@ -245,6 +272,88 @@ test('filterAndSortProducts filters by category, spotlight, search, and sorts by
     ingredientMatch.map((p) => p.id),
     ['p2']
   );
+
+  const offersUnder200 = filterAndSortProducts({
+    products: sampleProducts,
+    selectedCategory: 'All',
+    dietaryFilter: 'All',
+    offersOnly: true,
+    maxPrice: 200,
+    searchQuery: '',
+  });
+  assert.deepEqual(
+    offersUnder200.map((p) => p.id),
+    ['p3']
+  );
+});
+
+test('reconcileCartWithProducts syncs live prices and flags sold-out items', () => {
+  const staleCart: CartItem[] = [
+    {
+      cartItemId: 'p1::std',
+      productId: 'p1',
+      name: 'Old Cake Name',
+      category: 'Cakes',
+      image: '',
+      optionId: 'std',
+      optionLabel: '500g',
+      unitPrice: 499,
+      quantity: 1,
+    },
+    {
+      cartItemId: 'p2::std',
+      productId: 'p2',
+      name: 'Paneer Masala Puff',
+      category: 'Puffs & Rolls',
+      image: '',
+      optionId: 'std',
+      optionLabel: '1 pc',
+      unitPrice: 45,
+      quantity: 2,
+    },
+  ];
+
+  const result = reconcileCartWithProducts(staleCart, sampleProducts);
+  assert.equal(result.hasChanges, true);
+  assert.equal(result.priceChangedCount, 1);
+  assert.equal(result.syncedCart[0].unitPrice, 550);
+  assert.equal(result.syncedCart[0].name, 'Belgian Truffle Cake');
+  assert.deepEqual(
+    result.unavailableItems.map((i) => i.productId),
+    ['p2']
+  );
+});
+
+test('getSmartCartUpsells & computeCartSavings suggest non-cake in-stock add-ons and compute total savings', () => {
+  const cartWithCake: CartItem[] = [
+    {
+      cartItemId: 'p1::std',
+      productId: 'p1',
+      name: 'Belgian Truffle Cake',
+      category: 'Cakes',
+      image: '',
+      optionId: 'std',
+      optionLabel: '500g',
+      unitPrice: 550,
+      quantity: 2,
+    },
+  ];
+
+  const upsells = getSmartCartUpsells(cartWithCake, sampleProducts, 3);
+  assert.deepEqual(
+    upsells.map((p) => p.id),
+    ['p3']
+  );
+
+  const savings = computeCartSavings(cartWithCake, sampleProducts, 80);
+  assert.equal(savings.mrpSavings, 200);
+  assert.equal(savings.promoSavings, 80);
+  assert.equal(savings.totalSavings, 280);
+});
+
+test('sanitizeText collapses extra whitespace and enforces max length', () => {
+  assert.equal(sanitizeText('   Ravi   Kiran  \n ', 80), 'Ravi Kiran');
+  assert.equal(sanitizeText('abcdefghij', 5), 'abcde');
 });
 
 test('computeOwnerAnalytics & filterOrdersForConsole aggregate real order and stock metrics', () => {
@@ -254,7 +363,7 @@ test('computeOwnerAnalytics & filterOrdersForConsole aggregate real order and st
   assert.equal(analytics.averageOrderValue, 918);
   assert.equal(analytics.activeDispatchCount, 1);
   assert.equal(analytics.pendingUpiReviews, 1);
-  assert.equal(analytics.inStockRatePct, 50);
+  assert.equal(analytics.inStockRatePct, 67);
 
   const upiPending = filterOrdersForConsole(sampleOrders, 'upi_pending', '');
   assert.deepEqual(

@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { User } from 'firebase/auth';
 import { QRCodeSVG } from 'qrcode.react';
 import {
+  AlertTriangle,
   ArrowLeft,
   BookmarkCheck,
   Check,
@@ -12,12 +13,18 @@ import {
   Minus,
   Plus,
   ShoppingBag,
+  Sparkles,
   Tag,
   Trash2,
   X,
 } from 'lucide-react';
 import { DEFAULT_BAKERY_SETTINGS, formatMoney, resolveDeliveryZone } from '../data/bakeryData';
-import { calculateCartSummary } from '../utils/bakeryLogic';
+import {
+  calculateCartSummary,
+  computeCartSavings,
+  getSmartCartUpsells,
+  sanitizeText,
+} from '../utils/bakeryLogic';
 import {
   BakerySettings,
   CartItem,
@@ -25,6 +32,7 @@ import {
   Order,
   OrderCustomerDetails,
   PaymentMethod,
+  Product,
   SavedAddress,
 } from '../types/bakery';
 import { ResilientImage } from './ResilientImage';
@@ -35,6 +43,8 @@ interface CartCheckoutDrawerProps {
   user: User | null;
   customerProfile: CustomerProfile | null;
   items: CartItem[];
+  products?: Product[];
+  unavailableProductIds?: Set<string>;
   settings: BakerySettings;
   appliedPromoCode: string;
   onApplyPromoCode: (code: string) => void;
@@ -46,6 +56,8 @@ interface CartCheckoutDrawerProps {
   onPostalCodeChange: (zip: string) => void;
   onUpdateQuantity: (cartItemId: string, delta: number) => void;
   onRemoveItem: (cartItemId: string) => void;
+  onQuickAddProduct?: (product: Product) => void;
+  onRemoveUnavailableItems?: () => void;
   onRequestSignIn: () => void;
   onSaveAddress: (address: Omit<SavedAddress, 'id'>) => Promise<void>;
   onPlaceOrder: (order: Omit<Order, 'customerId' | 'customerEmail'>) => Promise<void>;
@@ -57,6 +69,8 @@ export function CartCheckoutDrawer({
   user,
   customerProfile,
   items,
+  products = [],
+  unavailableProductIds,
   settings,
   appliedPromoCode,
   onApplyPromoCode,
@@ -68,6 +82,8 @@ export function CartCheckoutDrawer({
   onPostalCodeChange,
   onUpdateQuantity,
   onRemoveItem,
+  onQuickAddProduct,
+  onRemoveUnavailableItems,
   onRequestSignIn,
   onSaveAddress,
   onPlaceOrder,
@@ -188,6 +204,14 @@ export function CartCheckoutDrawer({
     settings.deliverySlots[0] ??
     DEFAULT_BAKERY_SETTINGS.deliverySlots[0];
 
+  const unavailableItems = unavailableProductIds
+    ? items.filter((item) => unavailableProductIds.has(item.productId))
+    : [];
+  const hasUnavailableItems = unavailableItems.length > 0;
+  const upsellProducts =
+    products.length > 0 && onQuickAddProduct ? getSmartCartUpsells(items, products, 3) : [];
+  const savings = computeCartSavings(items, products, discount);
+
   const tipPresets =
     settings.currency === '₹' ? [0, 20, 40, 60] : [0, 2, 4, 6];
 
@@ -254,11 +278,25 @@ export function CartCheckoutDrawer({
       onRequestSignIn();
       return;
     }
+    if (hasUnavailableItems) {
+      setFormError('Some items in your bag are sold out. Please remove them before placing your order.');
+      setStep('bag');
+      return;
+    }
+
+    const cleanFullName = sanitizeText(customer.fullName, 80);
+    const cleanPhone = sanitizeText(customer.phone, 24);
+    const cleanStreet = sanitizeText(customer.streetAddress, 160);
+    const cleanApt = sanitizeText(customer.apartment, 60);
+    const cleanPin = sanitizeText(customer.postalCode, 16);
+    const cleanInstructions = sanitizeText(customer.instructions, 200);
+    const cleanUpiRef = sanitizeText(upiReference, 40);
+
     if (
-      customer.fullName.trim().length < 1 ||
-      customer.phone.trim().length < 5 ||
-      customer.streetAddress.trim().length < 3 ||
-      customer.postalCode.trim().length < 3
+      cleanFullName.length < 1 ||
+      cleanPhone.length < 5 ||
+      cleanStreet.length < 3 ||
+      cleanPin.length < 3
     ) {
       setFormError(
         'Please enter your full name, valid phone number (5+ digits), full street address, and pin code.'
@@ -273,7 +311,7 @@ export function CartCheckoutDrawer({
         );
         return;
       }
-      if (upiReference.trim().length < 4) {
+      if (cleanUpiRef.length < 4) {
         setFormError(
           'After paying via UPI, please enter your 12-digit UPI Reference / UTR number so we can verify payment.'
         );
@@ -286,22 +324,25 @@ export function CartCheckoutDrawer({
     try {
       if (saveAddressChecked && user) {
         await onSaveAddress({
-          label: addressLabel.trim() || 'Home',
-          fullName: customer.fullName.trim(),
-          phone: customer.phone.trim(),
-          streetAddress: customer.streetAddress.trim(),
-          apartment: customer.apartment.trim(),
-          postalCode: customer.postalCode.trim(),
-          instructions: customer.instructions.trim(),
+          label: sanitizeText(addressLabel, 30) || 'Home',
+          fullName: cleanFullName,
+          phone: cleanPhone,
+          streetAddress: cleanStreet,
+          apartment: cleanApt,
+          postalCode: cleanPin,
+          instructions: cleanInstructions,
         });
       }
 
-      const combinedNote = [
-        orderNote.trim(),
-        paymentMethod === 'online_card' ? `Card Payment Request (${cardPreference})` : '',
-      ]
-        .filter(Boolean)
-        .join(' · ');
+      const combinedNote = sanitizeText(
+        [
+          orderNote.trim(),
+          paymentMethod === 'online_card' ? `Card Payment Request (${cardPreference})` : '',
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        240
+      );
 
       const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       await onPlaceOrder({
@@ -309,18 +350,18 @@ export function CartCheckoutDrawer({
         createdAtLabel: nowTime,
         deliveryDay,
         deliveryWindow: activeSlot.window,
-        neighborhood: zone.neighborhood,
+        neighborhood: sanitizeText(zone.neighborhood, 100),
         customer: {
-          fullName: customer.fullName.trim(),
-          phone: customer.phone.trim(),
-          streetAddress: customer.streetAddress.trim(),
-          apartment: customer.apartment.trim(),
-          postalCode: customer.postalCode.trim(),
-          instructions: customer.instructions.trim(),
+          fullName: cleanFullName,
+          phone: cleanPhone,
+          streetAddress: cleanStreet,
+          apartment: cleanApt,
+          postalCode: cleanPin,
+          instructions: cleanInstructions,
         },
         paymentMethod,
         paymentStatus: paymentMethod === 'upi_prepaid' ? 'verification_pending' : 'pending',
-        upiReference: paymentMethod === 'upi_prepaid' ? upiReference.trim() : undefined,
+        upiReference: paymentMethod === 'upi_prepaid' ? cleanUpiRef : undefined,
         items: [...items],
         subtotal,
         discount: discount > 0 ? discount : undefined,
@@ -432,72 +473,161 @@ export function CartCheckoutDrawer({
             </div>
           ) : step === 'bag' ? (
             <div className="space-y-6">
+              {/* Sold-out / Unavailable Item Alert */}
+              {hasUnavailableItems && (
+                <div
+                  role="alert"
+                  className="p-3.5 rounded-xl bg-[#FEF2F2] border border-[#FECACA] flex items-start justify-between gap-3"
+                >
+                  <div className="flex items-start gap-2.5 text-xs text-[#991B1B]">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold">
+                        {unavailableItems.length}{' '}
+                        {unavailableItems.length === 1 ? 'item is' : 'items are'} currently sold out
+                      </p>
+                      <p className="mt-0.5 text-[#7F1D1D]">
+                        Remove unavailable items before proceeding to checkout.
+                      </p>
+                    </div>
+                  </div>
+                  {onRemoveUnavailableItems && (
+                    <button
+                      type="button"
+                      onClick={onRemoveUnavailableItems}
+                      className="px-2.5 py-1.5 text-[11px] font-semibold bg-[#991B1B] text-white rounded-lg hover:bg-[#7F1D1D] shrink-0 cursor-pointer"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* Itemized List */}
               <ul className="divide-y divide-[#E4DFD5]">
-                {items.map((item) => (
-                  <li key={item.cartItemId} className="py-4 first:pt-0 flex gap-4">
-                    <div className="w-20 h-16 rounded-xl overflow-hidden bg-[#EAE0D2] shrink-0">
-                      <ResilientImage
-                        src={item.image}
-                        alt={item.name}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <h3 className="text-sm font-semibold text-[#1C1917] truncate">
-                            {item.name}
-                          </h3>
-                          <p className="text-xs text-[#57534E] mt-0.5">{item.optionLabel}</p>
-                          {item.customizationSummary && (
-                            <p className="text-[11px] text-[#9A3412] mt-1 leading-snug">
-                              {item.customizationSummary}
-                            </p>
-                          )}
-                        </div>
-                        <span className="font-mono-tabular text-sm font-medium text-[#1C1917] shrink-0">
-                          {formatMoney(item.unitPrice * item.quantity, settings.currency)}
-                        </span>
+                {items.map((item) => {
+                  const isItemUnavailable = unavailableProductIds?.has(item.productId) ?? false;
+                  return (
+                    <li
+                      key={item.cartItemId}
+                      className={`py-4 first:pt-0 flex gap-4 ${isItemUnavailable ? 'opacity-75' : ''}`}
+                    >
+                      <div className="w-20 h-16 rounded-xl overflow-hidden bg-[#EAE0D2] shrink-0">
+                        <ResilientImage
+                          src={item.image}
+                          alt={item.name}
+                          className="w-full h-full object-cover"
+                        />
                       </div>
-
-                      <div className="mt-3 flex items-center justify-between">
-                        <div className="inline-flex items-center border border-[#D6C9B8] rounded-lg bg-[#FFFFFF]">
-                          <button
-                            type="button"
-                            onClick={() => onUpdateQuantity(item.cartItemId, -1)}
-                            aria-label={`Decrease ${item.name} quantity`}
-                            className="w-8 h-8 flex items-center justify-center text-[#1C1917] hover:bg-[#F3EBDF] rounded-l-lg cursor-pointer"
-                          >
-                            <Minus className="w-3.5 h-3.5" />
-                          </button>
-                          <span className="w-8 text-center font-mono-tabular text-xs font-medium">
-                            {item.quantity}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <h3 className="text-sm font-semibold text-[#1C1917] truncate">
+                              {item.name}
+                            </h3>
+                            <p className="text-xs text-[#57534E] mt-0.5">
+                              {item.optionLabel}
+                              {isItemUnavailable && (
+                                <span className="ml-2 font-semibold text-[#B91C1C]">· Sold Out</span>
+                              )}
+                            </p>
+                            {item.customizationSummary && (
+                              <p className="text-[11px] text-[#9A3412] mt-1 leading-snug">
+                                {item.customizationSummary}
+                              </p>
+                            )}
+                          </div>
+                          <span className="font-mono-tabular text-sm font-medium text-[#1C1917] shrink-0">
+                            {formatMoney(item.unitPrice * item.quantity, settings.currency)}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => onUpdateQuantity(item.cartItemId, 1)}
-                            aria-label={`Increase ${item.name} quantity`}
-                            className="w-8 h-8 flex items-center justify-center text-[#1C1917] hover:bg-[#F3EBDF] rounded-r-lg cursor-pointer"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                          </button>
                         </div>
 
+                        <div className="mt-3 flex items-center justify-between">
+                          <div className="inline-flex items-center border border-[#D6C9B8] rounded-lg bg-[#FFFFFF]">
+                            <button
+                              type="button"
+                              onClick={() => onUpdateQuantity(item.cartItemId, -1)}
+                              aria-label={`Decrease ${item.name} quantity`}
+                              className="w-8 h-8 flex items-center justify-center text-[#1C1917] hover:bg-[#F3EBDF] rounded-l-lg cursor-pointer"
+                            >
+                              <Minus className="w-3.5 h-3.5" />
+                            </button>
+                            <span className="w-8 text-center font-mono-tabular text-xs font-medium">
+                              {item.quantity}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => onUpdateQuantity(item.cartItemId, 1)}
+                              disabled={isItemUnavailable}
+                              aria-label={`Increase ${item.name} quantity`}
+                              className="w-8 h-8 flex items-center justify-center text-[#1C1917] hover:bg-[#F3EBDF] disabled:opacity-40 rounded-r-lg cursor-pointer"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => onRemoveItem(item.cartItemId)}
+                            aria-label={`Remove ${item.name}`}
+                            className="text-xs text-[#57534E] hover:text-[#B91C1C] inline-flex items-center gap-1 py-1 px-2 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Remove</span>
+                          </button>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              {/* Smart Cart Upsells ("Complete Your Order") */}
+              {upsellProducts.length > 0 && onQuickAddProduct && (
+                <div className="pt-4 border-t border-[#E4DFD5] space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-[#1C1917] inline-flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-[#9A3412]" />
+                      <span>Complete Your Order</span>
+                    </span>
+                    <span className="text-[11px] text-[#57534E]">Popular pairings</span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2">
+                    {upsellProducts.map((upsell) => (
+                      <div
+                        key={upsell.id}
+                        className="p-2.5 rounded-xl bg-white border border-[#E4DFD5] flex items-center justify-between gap-3"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-11 h-11 rounded-lg overflow-hidden bg-[#EAE0D2] shrink-0">
+                            <ResilientImage
+                              src={upsell.image}
+                              alt={upsell.name}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-[#1C1917] truncate">
+                              {upsell.name}
+                            </p>
+                            <p className="font-mono-tabular text-[11px] text-[#57534E]">
+                              {formatMoney(upsell.price, settings.currency)} · {upsell.weight}
+                            </p>
+                          </div>
+                        </div>
                         <button
                           type="button"
-                          onClick={() => onRemoveItem(item.cartItemId)}
-                          aria-label={`Remove ${item.name}`}
-                          className="text-xs text-[#57534E] hover:text-[#B91C1C] inline-flex items-center gap-1 py-1 px-2 cursor-pointer"
+                          onClick={() => onQuickAddProduct(upsell)}
+                          aria-label={`Quick add ${upsell.name}`}
+                          className="px-3 py-1.5 text-xs font-semibold text-[#9A3412] bg-[#FFF7ED] border border-[#9A3412]/40 hover:bg-[#9A3412] hover:text-white rounded-lg transition-colors cursor-pointer shrink-0 whitespace-nowrap"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>Remove</span>
+                          + Add
                         </button>
                       </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Coupon Codes */}
               <div className="pt-4 border-t border-[#E4DFD5] space-y-2.5">
@@ -1048,6 +1178,18 @@ export function CartCheckoutDrawer({
         {/* Drawer Footer */}
         {items.length > 0 && (
           <div className="px-6 py-4 border-t border-[#E4DFD5] bg-[#FFFFFF] space-y-3">
+            {savings.totalSavings > 0 && (
+              <div className="px-3 py-2 rounded-xl bg-[#ECFDF5] border border-[#A7F3D0] flex items-center justify-between text-xs text-[#065F46] font-semibold">
+                <span className="inline-flex items-center gap-1.5">
+                  <Tag className="w-3.5 h-3.5" />
+                  <span>Total Savings on This Order</span>
+                </span>
+                <span className="font-mono-tabular">
+                  {formatMoney(savings.totalSavings, settings.currency)} saved
+                </span>
+              </div>
+            )}
+
             <div className="space-y-1.5 text-sm">
               <div className="flex justify-between text-[#57534E]">
                 <span>Item Total</span>
@@ -1096,17 +1238,18 @@ export function CartCheckoutDrawer({
             {step === 'bag' ? (
               <button
                 type="button"
+                disabled={hasUnavailableItems}
                 onClick={() => setStep('checkout')}
-                className="w-full py-3 px-5 bg-[#9A3412] hover:bg-[#7C2D12] text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
+                className="w-full py-3 px-5 bg-[#9A3412] hover:bg-[#7C2D12] disabled:bg-[#9CA3AF] disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
               >
-                Proceed to Checkout
+                {hasUnavailableItems ? 'Remove Sold-Out Items First' : 'Proceed to Checkout'}
               </button>
             ) : (
               <button
                 type="submit"
                 form="bakery-checkout-form"
-                disabled={submitting}
-                className="w-full py-3 px-5 bg-[#9A3412] hover:bg-[#7C2D12] disabled:opacity-60 text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
+                disabled={submitting || hasUnavailableItems}
+                className="w-full py-3 px-5 bg-[#9A3412] hover:bg-[#7C2D12] disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
               >
                 {submitting
                   ? 'Confirming Order...'

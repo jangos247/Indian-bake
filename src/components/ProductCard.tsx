@@ -1,4 +1,5 @@
-import { Check, Heart, Plus, Sparkles, Star } from 'lucide-react';
+import { memo } from 'react';
+import { Check, Heart, Minus, Plus, Sparkles, Star } from 'lucide-react';
 import { formatMoney, normalizeCategory } from '../data/bakeryData';
 import { CurrencySymbol, Product } from '../types/bakery';
 import { ResilientImage } from './ResilientImage';
@@ -9,22 +10,26 @@ interface ProductCardProps {
   currency: CurrencySymbol;
   isWishlisted: boolean;
   isJustAdded: boolean;
+  cartQuantity?: number;
   ratingValue?: number;
   reviewCount?: number;
   onOpenProduct: (product: Product) => void;
   onQuickAdd: (product: Product) => void;
+  onStepCartQuantity?: (product: Product, delta: number) => void;
   onToggleWishlist: (productId: string) => void;
 }
 
-export function ProductCard({
+export const ProductCard = memo(function ProductCard({
   product,
   currency,
   isWishlisted,
   isJustAdded,
+  cartQuantity = 0,
   ratingValue,
   reviewCount,
   onOpenProduct,
   onQuickAdd,
+  onStepCartQuantity,
   onToggleWishlist,
 }: ProductCardProps) {
   const displayCategory = normalizeCategory(product.category);
@@ -141,37 +146,64 @@ export function ProductCard({
             {isCake ? 'Customize & Details' : 'Details & Reviews'}
           </button>
 
-          <button
-            type="button"
-            disabled={!product.inStock}
-            onClick={() => (isCake ? onOpenProduct(product) : onQuickAdd(product))}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-xl transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:bg-[#9CA3AF] disabled:cursor-not-allowed ${
-              isJustAdded
-                ? 'bg-[#1B4332] text-white'
-                : 'bg-[#9A3412] hover:bg-[#7C2D12] text-white'
-            }`}
-          >
-            {!product.inStock ? (
-              <span>Sold Out</span>
-            ) : isJustAdded ? (
-              <>
-                <Check className="w-3.5 h-3.5" />
-                <span>Added</span>
-              </>
-            ) : isCake ? (
-              <>
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Customize Cake</span>
-              </>
-            ) : (
-              <>
+          {product.inStock && !isCake && cartQuantity > 0 && onStepCartQuantity ? (
+            <div className="inline-flex items-center rounded-xl border border-[#9A3412] bg-[#FFF7ED] overflow-hidden shrink-0">
+              <button
+                type="button"
+                onClick={() => onStepCartQuantity(product, -1)}
+                aria-label={`Decrease quantity of ${product.name}`}
+                className="w-8 h-8 flex items-center justify-center text-[#9A3412] hover:bg-[#9A3412] hover:text-white transition-colors cursor-pointer"
+              >
+                <Minus className="w-3.5 h-3.5" />
+              </button>
+              <span
+                aria-label={`${product.name} quantity in cart`}
+                className="min-w-[26px] text-center font-mono-tabular text-xs font-bold text-[#9A3412]"
+              >
+                {cartQuantity}
+              </span>
+              <button
+                type="button"
+                onClick={() => onStepCartQuantity(product, 1)}
+                aria-label={`Increase quantity of ${product.name}`}
+                className="w-8 h-8 flex items-center justify-center text-[#9A3412] hover:bg-[#9A3412] hover:text-white transition-colors cursor-pointer"
+              >
                 <Plus className="w-3.5 h-3.5" />
-                <span>Add to Cart</span>
-              </>
-            )}
-          </button>
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              disabled={!product.inStock}
+              onClick={() => (isCake ? onOpenProduct(product) : onQuickAdd(product))}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-xl transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:bg-[#9CA3AF] disabled:cursor-not-allowed ${
+                isJustAdded
+                  ? 'bg-[#1B4332] text-white'
+                  : 'bg-[#9A3412] hover:bg-[#7C2D12] text-white'
+              }`}
+            >
+              {!product.inStock ? (
+                <span>Sold Out</span>
+              ) : isJustAdded ? (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Added</span>
+                </>
+              ) : isCake ? (
+                <>
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Customize Cake</span>
+                </>
+              ) : (
+                <>
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add to Cart</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
     </article>
   );
-}
+});
