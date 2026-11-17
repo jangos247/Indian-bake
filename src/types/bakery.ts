@@ -134,7 +134,7 @@ export type PaymentMethod =
   | 'upi_prepaid'
   | 'online_card';
 
-export type PaymentStatus = 'pending' | 'verification_pending' | 'verified' | 'paid';
+export type PaymentStatus = 'pending' | 'verification_pending' | 'verified' | 'paid' | 'rejected';
 
 export type OrderStage =
   | 'confirmed'
@@ -214,5 +214,11 @@ export interface ProductReview {
   authorId: string;
   authorName: string;
   rating: number;
+  headline?: string;
   comment: string;
+  verifiedPurchase?: boolean;
+  ownerReply?: string;
+  ownerReplyBy?: string;
+  createdAt?: unknown;
+  ownerRepliedAt?: unknown;
 }

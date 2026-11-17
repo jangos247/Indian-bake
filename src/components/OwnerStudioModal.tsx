@@ -1,12 +1,16 @@
 import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   Check,
+  Copy,
   Edit3,
+  MessageSquare,
   Plus,
+  Reply,
   RotateCcw,
-  Search,
   ShieldCheck,
   Sparkles,
+  Star,
   Tag,
   Trash2,
   Upload,
@@ -20,12 +24,8 @@ import {
   PRESET_PRODUCT_IMAGES,
   resolveBakeryImageUrl,
 } from '../data/bakeryData';
-import {
-  computeOwnerAnalytics,
-  filterOrdersForConsole,
-  OrderConsoleFilter,
-} from '../utils/bakeryLogic';
 import { BOOTSTRAPPED_OWNER_EMAILS, emailToOwnerDocId } from '../lib/firebase';
+import { formatFriendlyFirestoreError, isValidUpiId } from '../lib/upi';
 import {
   BakerySettings,
   CurrencySymbol,
@@ -37,6 +37,7 @@ import {
   Product,
   ProductCategory,
   ProductOption,
+  ProductReview,
   PromoCodeOffer,
   VegType,
 } from '../types/bakery';
@@ -58,6 +59,9 @@ interface OwnerStudioModalProps {
   orders: Order[];
   onAdvanceOrderStage: (orderId: string) => Promise<void>;
   onUpdatePaymentStatus: (orderId: string, status: PaymentStatus) => Promise<void>;
+  reviews: ProductReview[];
+  onReplyReview: (reviewId: string, replyText: string) => Promise<void>;
+  onDeleteReview: (reviewId: string) => Promise<void>;
   owners: OwnerAccount[];
   currentUserEmail: string;
   onAddOwner: (email: string, label?: string) => Promise<void>;
@@ -89,6 +93,7 @@ const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = {
   verification_pending: 'Verify UPI UTR',
   verified: 'UPI Verified',
   paid: 'Paid',
+  rejected: 'UPI Verification Failed',
 };
 
 function createBlankProduct(): Product {
@@ -161,14 +166,15 @@ export function OwnerStudioModal({
   orders,
   onAdvanceOrderStage,
   onUpdatePaymentStatus,
+  reviews,
+  onReplyReview,
+  onDeleteReview,
   owners,
   currentUserEmail,
   onAddOwner,
   onRemoveOwner,
 }: OwnerStudioModalProps) {
-  const [activeTab, setActiveTab] = useState<'products' | 'offers' | 'orders' | 'settings' | 'owners' | 'publish'>('products');
-  const [orderConsoleFilter, setOrderConsoleFilter] = useState<OrderConsoleFilter>('all');
-  const [orderSearchQuery, setOrderSearchQuery] = useState('');
+  const [activeTab, setActiveTab] = useState<'products' | 'offers' | 'orders' | 'feedback' | 'settings' | 'owners' | 'publish'>('products');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [ingredientsText, setIngredientsText] = useState('');
   const [savedNotice, setSavedNotice] = useState('');
@@ -179,6 +185,17 @@ export function OwnerStudioModal({
   const [ownerError, setOwnerError] = useState('');
 
   const [settingsDraft, setSettingsDraft] = useState<BakerySettings>(settings);
+  const [settingsError, setSettingsError] = useState('');
+  const [copiedUtrOrderId, setCopiedUtrOrderId] = useState<string | null>(null);
+  const [pendingDispatchConfirmId, setPendingDispatchConfirmId] = useState<string | null>(null);
+
+  const [feedbackFilter, setFeedbackFilter] = useState<'all' | 'needs_reply' | 'store' | 'product'>('all');
+  const [replyingReviewId, setReplyingReviewId] = useState<string | null>(null);
+  const [replyDraft, setReplyDraft] = useState('');
+  const [replyBusy, setReplyBusy] = useState(false);
+  const [confirmDeleteReviewId, setConfirmDeleteReviewId] = useState<string | null>(null);
+  const [deletingReviewId, setDeletingReviewId] = useState<string | null>(null);
+
   const [newZonePrefix, setNewZonePrefix] = useState('');
   const [newZoneNeighborhood, setNewZoneNeighborhood] = useState('');
   const [newZoneEta, setNewZoneEta] = useState('30–40 min');
@@ -203,6 +220,12 @@ export function OwnerStudioModal({
       setSavedNotice('');
       setSavingBusy(false);
       setOwnerError('');
+      setSettingsError('');
+      setCopiedUtrOrderId(null);
+      setPendingDispatchConfirmId(null);
+      setReplyingReviewId(null);
+      setReplyDraft('');
+      setConfirmDeleteReviewId(null);
       return;
     }
     const handleKey = (e: KeyboardEvent) => {
@@ -228,8 +251,8 @@ export function OwnerStudioModal({
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <ShieldCheck className="w-5 h-5 text-[#9A3412]" />
-              <h2 className="font-display text-lg font-semibold text-[#1C1917]">
+              <ShieldCheck className="w-5 h-5 text-[#C45512]" />
+              <h2 className="font-display text-lg font-semibold text-[#171716]">
                 Bakery Owner Login Required
               </h2>
             </div>
@@ -237,12 +260,12 @@ export function OwnerStudioModal({
               type="button"
               onClick={onClose}
               aria-label="Close"
-              className="p-1.5 rounded-lg text-[#57534E] hover:bg-[#F2EFE9] cursor-pointer"
+              className="p-1.5 rounded-lg text-[#5C5A55] hover:bg-[#F3F2EE] cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
-          <p className="text-xs leading-relaxed text-[#57534E]">
+          <p className="text-xs leading-relaxed text-[#5C5A55]">
             Sign in with your authorized Bakery Owner Google account to add/edit menu items, publish festival discounts, and update live orders across all customer devices.
           </p>
           <button
@@ -251,7 +274,7 @@ export function OwnerStudioModal({
               onClose();
               onRequestOwnerSignIn();
             }}
-            className="w-full py-2.5 bg-[#9A3412] hover:bg-[#7C2D12] text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
+            className="w-full py-2.5 bg-[#C45512] hover:bg-[#A9450C] text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
           >
             Go to Owner Login
           </button>
@@ -395,7 +418,16 @@ export function OwnerStudioModal({
 
   const handleSettingsSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    await handleSettingsSave(settingsDraft, 'Store & delivery settings saved live.');
+    const cleanedUpi = (settingsDraft.upiId ?? '').trim();
+    if (!isValidUpiId(cleanedUpi)) {
+      setSettingsError('Please enter a valid UPI ID (e.g., 9491250264@ybl or ibcbakery@okicici).');
+      return;
+    }
+    setSettingsError('');
+    await handleSettingsSave(
+      { ...settingsDraft, upiId: cleanedUpi },
+      'Store & delivery settings saved live.'
+    );
   };
 
   const handleOffersSubmit = async (e: FormEvent) => {
@@ -514,6 +546,8 @@ export function OwnerStudioModal({
     }));
   };
 
+  const totalRevenue = orders.reduce((sum, o) => sum + o.total, 0);
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 sm:p-6"
@@ -566,6 +600,7 @@ export function OwnerStudioModal({
                 { id: 'products', label: `Menu (${products.length})` },
                 { id: 'offers', label: 'Festival Offers' },
                 { id: 'orders', label: `Orders (${orders.length})` },
+                { id: 'feedback', label: `Feedback (${reviews.length})` },
                 { id: 'settings', label: 'Store Settings' },
                 { id: 'owners', label: 'Add Owner' },
                 { id: 'publish', label: 'Publish Web App' },
@@ -580,8 +615,8 @@ export function OwnerStudioModal({
                 }}
                 className={`px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
                   activeTab === tab.id
-                    ? 'bg-white text-[#1C1917] shadow-xs'
-                    : 'text-[#57534E] hover:text-[#1C1917]'
+                    ? 'bg-white text-[#171716] shadow-xs'
+                    : 'text-[#5C5A55] hover:text-[#171716]'
                 }`}
               >
                 {tab.label}
@@ -598,7 +633,7 @@ export function OwnerStudioModal({
                     showNotice('Loaded complete 8-category Indian Bakery menu & festival offers.')
                   );
                 }}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#57534E] hover:text-[#1C1917] bg-white border border-[#D6D0C4] rounded-lg cursor-pointer whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#5C5A55] hover:text-[#171716] bg-white border border-[#D8D5CC] rounded-lg cursor-pointer whitespace-nowrap"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>Load 8-Category Menu</span>
@@ -606,7 +641,7 @@ export function OwnerStudioModal({
               <button
                 type="button"
                 onClick={startNewProduct}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#9A3412] hover:bg-[#7C2D12] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#C45512] hover:bg-[#A9450C] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
               >
                 <Plus className="w-4 h-4" />
                 <span>Add Product</span>
@@ -1361,173 +1396,423 @@ export function OwnerStudioModal({
           )}
 
           {/* TAB 3: ORDERS */}
-          {activeTab === 'orders' && (() => {
-            const analytics = computeOwnerAnalytics(orders, products);
-            const filteredConsoleOrders = filterOrdersForConsole(
-              orders,
-              orderConsoleFilter,
-              orderSearchQuery
-            );
-            return (
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
-                  <div className="p-4 bg-white border border-[#E5E3DC] rounded-xl">
-                    <p className="text-xs text-[#5C5A55]">Total Orders</p>
-                    <p className="mt-1 font-mono-tabular text-2xl font-semibold text-[#171716]">
-                      {analytics.totalOrders}
-                    </p>
-                  </div>
-                  <div className="p-4 bg-white border border-[#E5E3DC] rounded-xl">
-                    <p className="text-xs text-[#5C5A55]">Gross Revenue</p>
-                    <p className="mt-1 font-mono-tabular text-2xl font-semibold text-[#171716]">
-                      {formatMoney(analytics.totalRevenue, settings.currency)}
-                    </p>
-                  </div>
-                  <div className="p-4 bg-white border border-[#E5E3DC] rounded-xl">
-                    <p className="text-xs text-[#5C5A55]">Avg Order Value</p>
-                    <p className="mt-1 font-mono-tabular text-2xl font-semibold text-[#171716]">
-                      {formatMoney(analytics.averageOrderValue, settings.currency)}
-                    </p>
-                  </div>
-                  <div className="p-4 bg-white border border-[#E5E3DC] rounded-xl">
-                    <p className="text-xs text-[#5C5A55]">Pending Dispatch / UPI</p>
-                    <p className="mt-1 font-mono-tabular text-2xl font-semibold text-[#9A3412]">
-                      {analytics.activeDispatchCount}
-                      <span className="text-xs font-normal text-[#5C5A55] ml-1.5">
-                        ({analytics.pendingUpiReviews} UPI)
-                      </span>
-                    </p>
-                  </div>
+          {activeTab === 'orders' && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                <div className="p-4 bg-white border border-[#E5E3DC] rounded-xl">
+                  <p className="text-xs text-[#5C5A55]">Total Orders</p>
+                  <p className="mt-1 font-mono-tabular text-2xl font-semibold text-[#171716]">
+                    {orders.length}
+                  </p>
                 </div>
-
-                {/* Order Filter & Search Toolbar */}
-                <div className="p-3.5 bg-white border border-[#E5E3DC] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="inline-flex flex-wrap items-center gap-1 p-1 rounded-lg bg-[#FAF9F6] border border-[#E5E3DC]">
-                    {(
-                      [
-                        { id: 'all', label: 'All Orders' },
-                        { id: 'active', label: 'Active Dispatch' },
-                        { id: 'upi_pending', label: 'UPI Review' },
-                        { id: 'delivered', label: 'Delivered' },
-                      ] as { id: OrderConsoleFilter; label: string }[]
-                    ).map((f) => (
-                      <button
-                        key={f.id}
-                        type="button"
-                        onClick={() => setOrderConsoleFilter(f.id)}
-                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
-                          orderConsoleFilter === f.id
-                            ? 'bg-[#171716] text-white'
-                            : 'text-[#5C5A55] hover:text-[#171716]'
-                        }`}
-                      >
-                        {f.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="relative flex-1 sm:max-w-xs">
-                    <Search className="w-3.5 h-3.5 text-[#5C5A55] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                    <input
-                      type="search"
-                      value={orderSearchQuery}
-                      onChange={(e) => setOrderSearchQuery(e.target.value)}
-                      placeholder="Search order ID, name, phone..."
-                      aria-label="Filter orders"
-                      className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#FAF9F6] border border-[#D8D5CC] rounded-lg focus:outline-none focus:border-[#9A3412]"
-                    />
-                  </div>
+                <div className="p-4 bg-white border border-[#E5E3DC] rounded-xl">
+                  <p className="text-xs text-[#5C5A55]">Order Volume</p>
+                  <p className="mt-1 font-mono-tabular text-2xl font-semibold text-[#171716]">
+                    {formatMoney(totalRevenue, settings.currency)}
+                  </p>
                 </div>
+                <div className="p-4 bg-white border border-[#E5E3DC] rounded-xl col-span-2 sm:col-span-1">
+                  <p className="text-xs text-[#5C5A55]">Active Dispatch</p>
+                  <p className="mt-1 font-mono-tabular text-2xl font-semibold text-[#171716]">
+                    {orders.filter((o) => o.stage !== 'delivered').length}
+                  </p>
+                </div>
+              </div>
 
-                {filteredConsoleOrders.length === 0 ? (
-                  <div className="p-8 bg-white border border-[#E5E3DC] rounded-xl text-center text-sm text-[#5C5A55]">
-                    {orders.length === 0
-                      ? 'No customer orders have been placed yet. Incoming orders will appear here live.'
-                      : 'No orders match the current filter or search query.'}
-                  </div>
-                ) : (
-                  filteredConsoleOrders.map((order) => (
+              {orders.length === 0 ? (
+                <div className="p-8 bg-white border border-[#E5E3DC] rounded-xl text-center text-sm text-[#5C5A55]">
+                  No customer orders have been placed yet. Incoming orders will appear here live.
+                </div>
+              ) : (
+                orders.map((order) => {
+                  const needsUpiVerificationWarning =
+                    order.paymentMethod === 'upi_prepaid' &&
+                    order.total > 0 &&
+                    (order.paymentStatus === 'verification_pending' || order.paymentStatus === 'rejected');
+
+                  return (
                     <div
                       key={order.id}
-                      className="p-5 bg-white border border-[#E5E3DC] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                      className="p-5 bg-white border border-[#E5E3DC] rounded-xl flex flex-col gap-3"
                     >
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-[#5C5A55]">
-                          <span className="font-mono-tabular font-semibold text-[#171716]">
-                            #{order.id}
-                          </span>
-                          <span aria-hidden="true">·</span>
-                          <span>
-                            {order.deliveryDay}, {order.deliveryWindow}
-                          </span>
-                          <span aria-hidden="true">·</span>
-                          <span className="font-medium text-[#9A3412]">
-                            {STAGE_LABELS[order.stage]}
-                          </span>
-                          <span aria-hidden="true">·</span>
-                          <span
-                            className={
-                              order.paymentStatus === 'verified' || order.paymentStatus === 'paid'
-                                ? 'font-medium text-[#166534]'
-                                : order.paymentStatus === 'verification_pending'
-                                  ? 'font-medium text-[#92400E]'
-                                  : 'text-[#5C5A55]'
-                            }
-                          >
-                            {PAYMENT_LABELS[order.paymentMethod]} (
-                            {PAYMENT_STATUS_LABELS[order.paymentStatus ?? 'pending']})
-                          </span>
-                        </div>
-                        <p className="text-sm font-semibold text-[#171716]">
-                          {order.customer.fullName} ({order.customer.phone}) — {order.customer.streetAddress} ({order.customer.postalCode})
-                        </p>
-                        <p className="text-xs text-[#5C5A55]">
-                          {order.items.map((i) => `${i.quantity}× ${i.name}`).join(', ')} ·{' '}
-                          <span className="font-mono-tabular font-medium text-[#171716]">
-                            {formatMoney(order.total, settings.currency)}
-                          </span>
-                          {order.upiReference && (
-                            <>
-                              {' · '}
-                              <span className="font-mono-tabular text-[#171716]">
-                                UTR: {order.upiReference}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-[#5C5A55]">
+                            <span className="font-mono-tabular font-semibold text-[#171716]">
+                              #{order.id}
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span>
+                              {order.deliveryDay}, {order.deliveryWindow}
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span className="font-medium text-[#C45512]">
+                              {STAGE_LABELS[order.stage]}
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span
+                              className={
+                                order.paymentStatus === 'verified' || order.paymentStatus === 'paid'
+                                  ? 'font-medium text-[#166534]'
+                                  : order.paymentStatus === 'verification_pending'
+                                    ? 'font-medium text-[#92400E]'
+                                    : order.paymentStatus === 'rejected'
+                                      ? 'font-medium text-[#991B1B]'
+                                      : 'text-[#5C5A55]'
+                              }
+                            >
+                              {PAYMENT_LABELS[order.paymentMethod]} (
+                              {PAYMENT_STATUS_LABELS[order.paymentStatus ?? 'pending']})
+                            </span>
+                          </div>
+                          <p className="text-sm font-semibold text-[#171716]">
+                            {order.customer.fullName} ({order.customer.phone}) — {order.customer.streetAddress} ({order.customer.postalCode})
+                          </p>
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-[#5C5A55]">
+                            <span>
+                              {order.items.map((i) => `${i.quantity}× ${i.name}`).join(', ')} ·{' '}
+                              <span className="font-mono-tabular font-medium text-[#171716]">
+                                {formatMoney(order.total, settings.currency)}
                               </span>
-                            </>
+                            </span>
+                            {order.upiReference && (
+                              <span className="inline-flex items-center gap-1.5">
+                                <span aria-hidden="true">·</span>
+                                <span className="font-mono-tabular font-semibold text-[#171716]">
+                                  UTR: {order.upiReference}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (order.upiReference && navigator.clipboard) {
+                                      void navigator.clipboard.writeText(order.upiReference);
+                                      setCopiedUtrOrderId(order.id);
+                                      window.setTimeout(() => {
+                                        setCopiedUtrOrderId((c) => (c === order.id ? null : c));
+                                      }, 1800);
+                                    }
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium bg-[#FAF9F6] hover:bg-[#F3F2EE] border border-[#D8D5CC] rounded text-[#171716] cursor-pointer"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                  <span>{copiedUtrOrderId === order.id ? 'Copied' : 'Copy UTR'}</span>
+                                </button>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          {order.paymentStatus !== 'verified' && order.paymentStatus !== 'paid' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPendingDispatchConfirmId(null);
+                                void onUpdatePaymentStatus(
+                                  order.id,
+                                  order.paymentMethod === 'upi_prepaid' ? 'verified' : 'paid'
+                                );
+                              }}
+                              className="px-3.5 py-2 text-xs font-medium text-[#166534] bg-[#F0FDF4] hover:bg-[#DCFCE7] border border-[#BBF7D0] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                            >
+                              {order.paymentMethod === 'upi_prepaid' ? 'Confirm UPI Paid' : 'Mark Paid'}
+                            </button>
                           )}
-                        </p>
+
+                          {order.paymentMethod === 'upi_prepaid' &&
+                            order.paymentStatus === 'verification_pending' && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void onUpdatePaymentStatus(order.id, 'rejected')
+                                }
+                                className="px-3 py-2 text-xs font-medium text-[#991B1B] bg-[#FEF2F2] hover:bg-[#FEE2E2] border border-[#FECACA] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                              >
+                                Reject UPI
+                              </button>
+                            )}
+
+                          {order.stage !== 'delivered' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (needsUpiVerificationWarning && pendingDispatchConfirmId !== order.id) {
+                                  setPendingDispatchConfirmId(order.id);
+                                  return;
+                                }
+                                setPendingDispatchConfirmId(null);
+                                void onAdvanceOrderStage(order.id);
+                              }}
+                              className="px-4 py-2 text-xs font-medium text-white bg-[#171716] hover:bg-[#33322E] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                            >
+                              Advance Stage
+                            </button>
+                          )}
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        {order.paymentStatus !== 'verified' && order.paymentStatus !== 'paid' && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void onUpdatePaymentStatus(
-                                order.id,
-                                order.paymentMethod === 'upi_prepaid' ? 'verified' : 'paid'
-                              )
-                            }
-                            className="px-3.5 py-2 text-xs font-medium text-[#166534] bg-[#F0FDF4] hover:bg-[#DCFCE7] border border-[#BBF7D0] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
-                          >
-                            {order.paymentMethod === 'upi_prepaid' ? 'Confirm UPI Paid' : 'Mark Paid'}
-                          </button>
-                        )}
-                        {order.stage !== 'delivered' && (
-                          <button
-                            type="button"
-                            onClick={() => void onAdvanceOrderStage(order.id)}
-                            className="px-4 py-2 text-xs font-medium text-white bg-[#171716] hover:bg-[#33322E] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
-                          >
-                            Advance Stage
-                          </button>
-                        )}
-                      </div>
+                      {pendingDispatchConfirmId === order.id && (
+                        <div className="p-3 rounded-lg bg-[#FFFBEB] border border-[#FDE68A] flex flex-wrap items-center justify-between gap-2 text-xs text-[#92400E]">
+                          <span className="inline-flex items-center gap-1.5 font-medium">
+                            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                            <span>
+                              UPI payment UTR {order.upiReference} is not confirmed yet. Advance order stage anyway?
+                            </span>
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setPendingDispatchConfirmId(null)}
+                              className="px-2.5 py-1 text-xs font-medium text-[#5C5A55] hover:text-[#171716] cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPendingDispatchConfirmId(null);
+                                void onAdvanceOrderStage(order.id);
+                              }}
+                              className="px-3 py-1 text-xs font-medium bg-[#B45309] text-white rounded-md cursor-pointer"
+                            >
+                              Confirm Dispatch
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  ))
-                )}
+                  );
+                })
+              )}
+            </div>
+          )}
+
+          {/* TAB 4: CUSTOMER FEEDBACK & REPLIES */}
+          {activeTab === 'feedback' && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-display text-lg font-semibold text-[#171716]">
+                    Customer Reviews &amp; Feedback
+                  </h3>
+                  <p className="text-xs text-[#5C5A55]">
+                    Reply publicly as {settings.bakeryName} or remove inappropriate/spam entries.
+                  </p>
+                </div>
+
+                <div className="inline-flex p-1 rounded-lg bg-[#E7E4DC]">
+                  {(
+                    [
+                      { id: 'all', label: `All (${reviews.length})` },
+                      {
+                        id: 'needs_reply',
+                        label: `Needs Reply (${reviews.filter((r) => !r.ownerReply).length})`,
+                      },
+                      { id: 'store', label: 'Store Experience' },
+                      { id: 'product', label: 'Menu Items' },
+                    ] as const
+                  ).map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setFeedbackFilter(f.id)}
+                      className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer whitespace-nowrap ${
+                        feedbackFilter === f.id
+                          ? 'bg-white text-[#171716] shadow-xs'
+                          : 'text-[#5C5A55] hover:text-[#171716]'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-            );
-          })()}
+
+              {(() => {
+                const filteredFeedback = reviews.filter((r) => {
+                  if (feedbackFilter === 'needs_reply') return !r.ownerReply;
+                  if (feedbackFilter === 'store') return r.productId === 'store-feedback';
+                  if (feedbackFilter === 'product') return r.productId !== 'store-feedback';
+                  return true;
+                });
+
+                if (filteredFeedback.length === 0) {
+                  return (
+                    <div className="p-8 bg-white border border-[#E5E3DC] rounded-xl text-center space-y-2">
+                      <MessageSquare className="w-6 h-6 text-[#8C8980] mx-auto" />
+                      <p className="text-sm text-[#5C5A55]">
+                        No customer feedback entries in this view yet.
+                      </p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-3">
+                    {filteredFeedback.map((rev) => {
+                      const matchedProd = products.find((p) => p.id === rev.productId);
+                      const topic =
+                        rev.productId === 'store-feedback'
+                          ? 'Overall Store & Delivery'
+                          : matchedProd?.name ?? rev.productId;
+
+                      return (
+                        <div
+                          key={rev.id}
+                          className="p-5 bg-white border border-[#E5E3DC] rounded-xl space-y-2.5"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                            <div className="flex flex-wrap items-center gap-2 text-[#5C5A55]">
+                              <span className="font-semibold text-[#171716]">{rev.authorName}</span>
+                              {rev.verifiedPurchase && (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span className="font-medium text-[#166534]">Verified Order</span>
+                                </>
+                              )}
+                              <span aria-hidden="true">·</span>
+                              <span className="text-[#171716] font-medium">{topic}</span>
+                            </div>
+
+                            <div className="flex items-center gap-0.5 text-[#E06D1F]">
+                              {[1, 2, 3, 4, 5].map((s) => (
+                                <Star
+                                  key={s}
+                                  className={`w-3.5 h-3.5 ${
+                                    s <= rev.rating
+                                      ? 'fill-[#E06D1F] text-[#E06D1F]'
+                                      : 'text-[#E5E3DC]'
+                                  }`}
+                                />
+                              ))}
+                            </div>
+                          </div>
+
+                          {rev.headline && (
+                            <p className="text-sm font-semibold text-[#171716]">{rev.headline}</p>
+                          )}
+                          <p className="text-sm text-[#46443F] leading-relaxed">{rev.comment}</p>
+
+                          {rev.ownerReply && replyingReviewId !== rev.id && (
+                            <div className="pt-2.5 border-t border-[#F0EDE6] pl-3 space-y-1">
+                              <p className="text-xs font-semibold text-[#C45512]">
+                                Reply from {rev.ownerReplyBy || settings.bakeryName}
+                              </p>
+                              <p className="text-xs text-[#171716] leading-relaxed">
+                                {rev.ownerReply}
+                              </p>
+                            </div>
+                          )}
+
+                          {replyingReviewId === rev.id && (
+                            <div className="pt-2 space-y-2">
+                              <textarea
+                                rows={2}
+                                maxLength={400}
+                                value={replyDraft}
+                                onChange={(e) => setReplyDraft(e.target.value)}
+                                placeholder="Write your official bakery reply..."
+                                className="w-full px-3 py-2 text-xs bg-[#FAF9F6] border border-[#D8D5CC] rounded-lg focus:outline-none focus:border-[#C45512]"
+                              />
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setReplyingReviewId(null);
+                                    setReplyDraft('');
+                                  }}
+                                  className="px-3 py-1.5 text-xs text-[#5C5A55] cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={replyBusy || !replyDraft.trim()}
+                                  onClick={() => {
+                                    const trimmed = replyDraft.trim();
+                                    if (!trimmed) return;
+                                    setReplyBusy(true);
+                                    void onReplyReview(rev.id, trimmed)
+                                      .then(() => {
+                                        setReplyingReviewId(null);
+                                        setReplyDraft('');
+                                        showNotice('Published bakery reply to customer review.');
+                                      })
+                                      .catch((err) => {
+                                        showNotice(formatFriendlyFirestoreError(err));
+                                      })
+                                      .finally(() => setReplyBusy(false));
+                                  }}
+                                  className="px-3.5 py-1.5 text-xs font-medium bg-[#171716] text-white rounded-lg cursor-pointer disabled:opacity-50"
+                                >
+                                  {replyBusy ? 'Saving...' : 'Post Reply'}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="pt-2 border-t border-[#F0EDE6] flex flex-wrap items-center justify-between gap-2 text-xs">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReplyingReviewId(rev.id);
+                                setReplyDraft(rev.ownerReply ?? '');
+                              }}
+                              className="inline-flex items-center gap-1 font-medium text-[#C45512] hover:underline cursor-pointer"
+                            >
+                              <Reply className="w-3.5 h-3.5" />
+                              <span>{rev.ownerReply ? 'Edit Reply' : 'Reply'}</span>
+                            </button>
+
+                            {confirmDeleteReviewId === rev.id ? (
+                              <div className="inline-flex items-center gap-2">
+                                <span className="text-[11px] text-[#991B1B]">Delete review?</span>
+                                <button
+                                  type="button"
+                                  disabled={deletingReviewId === rev.id}
+                                  onClick={() => {
+                                    setDeletingReviewId(rev.id);
+                                    void onDeleteReview(rev.id)
+                                      .then(() => {
+                                        setConfirmDeleteReviewId(null);
+                                        showNotice('Customer review deleted.');
+                                      })
+                                      .catch((err) => {
+                                        showNotice(formatFriendlyFirestoreError(err));
+                                      })
+                                      .finally(() => setDeletingReviewId(null));
+                                  }}
+                                  className="px-2.5 py-1 text-[11px] font-medium bg-[#991B1B] text-white rounded cursor-pointer"
+                                >
+                                  {deletingReviewId === rev.id ? 'Deleting...' : 'Confirm'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteReviewId(null)}
+                                  className="px-2 py-1 text-[11px] text-[#5C5A55] cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteReviewId(rev.id)}
+                                className="inline-flex items-center gap-1 text-[#5C5A55] hover:text-[#991B1B] cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>Delete</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
 
           {/* TAB 4: SETTINGS */}
           {activeTab === 'settings' && (
@@ -1831,6 +2116,12 @@ export function OwnerStudioModal({
                 </div>
               </div>
 
+              {settingsError && (
+                <p className="text-xs font-medium text-[#991B1B] bg-[#FEF2F2] border border-[#FECACA] px-3 py-2 rounded-lg">
+                  {settingsError}
+                </p>
+              )}
+
               <div className="pt-4 border-t border-[#E5E3DC] flex justify-end">
                 <button
                   type="submit"
@@ -1903,12 +2194,12 @@ export function OwnerStudioModal({
                     value={newOwnerLabel}
                     onChange={(e) => setNewOwnerLabel(e.target.value)}
                     placeholder="Role / Name (optional, e.g., Manager)"
-                    className="sm:col-span-4 px-3 py-2 text-sm bg-white border border-[#D6D0C4] rounded-lg focus:outline-none focus:border-[#9A3412]"
+                    className="sm:col-span-4 px-3 py-2 text-sm bg-white border border-[#D8D5CC] rounded-lg focus:outline-none focus:border-[#B91C1C]"
                   />
                   <button
                     type="submit"
                     disabled={savingBusy}
-                    className="sm:col-span-2 px-4 py-2 text-xs font-medium bg-[#9A3412] hover:bg-[#7C2D12] disabled:opacity-60 text-white rounded-lg cursor-pointer whitespace-nowrap"
+                    className="sm:col-span-2 px-4 py-2 text-xs font-medium bg-[#B91C1C] hover:bg-[#991B1B] disabled:opacity-60 text-white rounded-lg cursor-pointer whitespace-nowrap"
                   >
                     {savingBusy ? 'Adding...' : 'Add Owner'}
                   </button>
@@ -1916,24 +2207,24 @@ export function OwnerStudioModal({
               </form>
 
               <div className="space-y-2.5">
-                <p className="text-xs font-medium text-[#57534E]">Current Owners</p>
+                <p className="text-xs font-medium text-[#5C5A55]">Current Owners</p>
                 {BOOTSTRAPPED_OWNER_EMAILS.map((email) => (
                   <div
                     key={email}
-                    className="p-3.5 rounded-lg bg-[#FAFAF7] border border-[#E4DFD5] flex items-center justify-between gap-3 text-xs"
+                    className="p-3.5 rounded-lg bg-[#FAF9F6] border border-[#E5E3DC] flex items-center justify-between gap-3 text-xs"
                   >
                     <div>
-                      <span className="font-mono-tabular font-semibold text-[#1C1917]">
+                      <span className="font-mono-tabular font-semibold text-[#171716]">
                         {email}
                       </span>
                       {currentUserEmail.toLowerCase() === email && (
                         <>
-                          <span className="mx-2 text-[#D6D0C4]">·</span>
+                          <span className="mx-2 text-[#C9C5BA]">·</span>
                           <span className="text-[#166534] font-medium">Signed in now</span>
                         </>
                       )}
                     </div>
-                    <span className="text-[#9A3412] font-medium">Primary Owner</span>
+                    <span className="text-[#B91C1C] font-medium">Primary Owner</span>
                   </div>
                 ))}
 

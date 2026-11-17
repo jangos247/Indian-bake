@@ -49,6 +49,7 @@ const PAYMENT_STATUS_LABELS: Record<NonNullable<Order['paymentStatus']>, string>
   verification_pending: 'Awaiting bakery UPI verification',
   verified: 'UPI payment verified',
   paid: 'Paid in full',
+  rejected: 'UPI verification failed — call bakery',
 };
 
 interface OrderTrackerContentProps {
@@ -318,7 +319,9 @@ export function OrderTrackerContent({
                         activeOrder.paymentStatus === 'verified' ||
                         activeOrder.paymentStatus === 'paid'
                           ? 'text-[#15803D] font-medium'
-                          : 'text-[#92400E] font-medium'
+                          : activeOrder.paymentStatus === 'rejected'
+                            ? 'text-[#B91C1C] font-medium'
+                            : 'text-[#92400E] font-medium'
                       }
                     >
                       {PAYMENT_STATUS_LABELS[activeOrder.paymentStatus]}

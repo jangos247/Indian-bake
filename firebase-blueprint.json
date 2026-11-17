@@ -119,9 +119,9 @@
         },
         "paymentStatus": {
           "type": "string",
-          "enum": ["pending", "verification_pending", "verified", "paid"]
+          "enum": ["pending", "verification_pending", "verified", "paid", "rejected"]
         },
-        "upiReference": { "type": "string", "maxLength": 40 },
+        "upiReference": { "type": "string", "minLength": 12, "maxLength": 12, "pattern": "^[0-9]{12}$" },
         "items": { "type": "array" },
         "subtotal": { "type": "number" },
         "discount": { "type": "number" },
@@ -193,18 +193,36 @@
     },
     "ProductReview": {
       "title": "ProductReview",
-      "description": "Verified customer rating and review for a bakery product.",
+      "description": "Verified customer rating, review, and bakery owner reply for a product or overall store experience.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "productId": { "type": "string", "minLength": 1, "maxLength": 80 },
         "authorId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "rating": { "type": "integer" },
+        "rating": { "type": "number" },
+        "headline": { "type": "string", "maxLength": 100 },
         "comment": { "type": "string", "minLength": 1, "maxLength": 400 },
+        "verifiedPurchase": { "type": "boolean" },
+        "ownerReply": { "type": "string", "maxLength": 400 },
+        "ownerReplyBy": { "type": "string", "maxLength": 80 },
+        "ownerRepliedAt": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "productId", "authorId", "authorName", "rating", "comment", "createdAt"]
+    },
+    "UtrClaim": {
+      "title": "UtrClaim",
+      "description": "Unique 12-digit NPCI UPI UTR lock preventing duplicate or fake UPI payment claims across orders.",
+      "type": "object",
+      "properties": {
+        "utr": { "type": "string", "minLength": 12, "maxLength": 12, "pattern": "^[0-9]{12}$" },
+        "orderId": { "type": "string", "minLength": 1, "maxLength": 40, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "amount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["utr", "orderId", "customerId", "amount", "createdAt"]
     }
   },
   "firestore": {
@@ -230,7 +248,11 @@
     },
     "/reviews/{reviewId}": {
       "schema": { "$ref": "#/entities/ProductReview" },
-      "description": "Public customer product reviews and star ratings."
+      "description": "Public customer product reviews, store feedback, and official owner replies."
+    },
+    "/utr_claims/{utr}": {
+      "schema": { "$ref": "#/entities/UtrClaim" },
+      "description": "Atomic unique lock per 12-digit UPI UTR reference number."
     }
   }
 }

@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { User } from 'firebase/auth';
-import { Cake, Heart, MessageSquarePlus, Minus, Plus, Star, X } from 'lucide-react';
+import { Cake, Check, Heart, MessageSquarePlus, Minus, Plus, Reply, Star, Trash2, X } from 'lucide-react';
 import {
   CAKE_FLAVOR_OPTIONS,
   CAKE_OCCASION_OPTIONS,
@@ -15,12 +15,20 @@ interface ProductModalProps {
   product: Product | null;
   currency: CurrencySymbol;
   user: User | null;
+  isOwner: boolean;
   isWishlisted: boolean;
   reviews: ProductReview[];
   onClose: () => void;
   onToggleWishlist: (productId: string) => void;
   onRequestSignIn: () => void;
-  onSubmitReview: (productId: string, rating: number, comment: string) => Promise<void>;
+  onSubmitReview: (
+    productId: string,
+    rating: number,
+    comment: string,
+    headline?: string
+  ) => Promise<void>;
+  onReplyReview: (reviewId: string, replyText: string) => Promise<void>;
+  onDeleteReview: (reviewId: string) => Promise<void>;
   onAddToCart: (
     product: Product,
     optionId: string,
@@ -33,12 +41,15 @@ export function ProductModal({
   product,
   currency,
   user,
+  isOwner,
   isWishlisted,
   reviews,
   onClose,
   onToggleWishlist,
   onRequestSignIn,
   onSubmitReview,
+  onReplyReview,
+  onDeleteReview,
   onAddToCart,
 }: ProductModalProps) {
   const [selectedOptionId, setSelectedOptionId] = useState<string>('');
@@ -53,9 +64,14 @@ export function ProductModal({
 
   // Review state
   const [reviewRating, setReviewRating] = useState(5);
+  const [reviewHeadline, setReviewHeadline] = useState('');
   const [reviewComment, setReviewComment] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
   const [reviewFeedback, setReviewFeedback] = useState('');
+  const [replyingId, setReplyingId] = useState<string | null>(null);
+  const [replyDraft, setReplyDraft] = useState('');
+  const [replyBusy, setReplyBusy] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     if (product) {
@@ -67,10 +83,16 @@ export function ProductModal({
       setCakeMessage('');
       setDesignNote('');
       setReviewRating(5);
+      setReviewHeadline('');
       setReviewComment('');
       setReviewFeedback('');
+      setReplyingId(null);
+      setReplyDraft('');
+      setConfirmDeleteId(null);
     }
-  }, [product]);
+    // Reset only when switching to a different product ID, not on live stock/price sync
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product?.id]);
 
   useEffect(() => {
     if (!product) return;
@@ -126,13 +148,32 @@ export function ProductModal({
     setSubmittingReview(true);
     setReviewFeedback('');
     try {
-      await onSubmitReview(product.id, reviewRating, reviewComment.trim());
+      await onSubmitReview(
+        product.id,
+        reviewRating,
+        reviewComment.trim(),
+        reviewHeadline.trim() || undefined
+      );
+      setReviewHeadline('');
       setReviewComment('');
       setReviewFeedback('Thank you! Your review is live.');
     } catch {
       setReviewFeedback('Could not post review right now.');
     } finally {
       setSubmittingReview(false);
+    }
+  };
+
+  const handleSaveReply = async (reviewId: string) => {
+    const trimmed = replyDraft.trim();
+    if (!trimmed) return;
+    setReplyBusy(true);
+    try {
+      await onReplyReview(reviewId, trimmed);
+      setReplyingId(null);
+      setReplyDraft('');
+    } finally {
+      setReplyBusy(false);
     }
   };
 
@@ -145,7 +186,7 @@ export function ProductModal({
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-4xl max-h-[92vh] overflow-y-auto bg-[#FAFAF7] border border-[#E4DFD5] rounded-2xl shadow-2xl grid grid-cols-1 lg:grid-cols-12"
+        className="relative w-full max-w-4xl max-h-[92vh] overflow-y-auto bg-[#FAF5EE] border border-[#E6DDD1] rounded-2xl shadow-2xl grid grid-cols-1 lg:grid-cols-12"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
@@ -153,24 +194,24 @@ export function ProductModal({
             type="button"
             onClick={() => onToggleWishlist(product.id)}
             aria-label={isWishlisted ? 'Remove from favourites' : 'Save to favourites'}
-            className="w-10 h-10 flex items-center justify-center rounded-full bg-[#FFFFFF]/95 text-[#1C1917] border border-[#E4DFD5] hover:border-[#9A3412] transition-colors cursor-pointer"
+            className="w-10 h-10 flex items-center justify-center rounded-full bg-[#FFFDF9]/95 text-[#3B2314] border border-[#E6DDD1] hover:border-[#C45512] transition-colors cursor-pointer"
           >
             <Heart
-              className={`w-4 h-4 ${isWishlisted ? 'fill-[#9A3412] text-[#9A3412]' : 'text-[#57534E]'}`}
+              className={`w-4 h-4 ${isWishlisted ? 'fill-[#C45512] text-[#C45512]' : 'text-[#6D4C3D]'}`}
             />
           </button>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close product details"
-            className="w-10 h-10 flex items-center justify-center rounded-full bg-[#FFFFFF]/95 text-[#1C1917] border border-[#E4DFD5] hover:bg-white transition-colors cursor-pointer"
+            className="w-10 h-10 flex items-center justify-center rounded-full bg-[#FFFDF9]/95 text-[#3B2314] border border-[#E6DDD1] hover:bg-white transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Left Image & Reviews Column */}
-        <div className="lg:col-span-5 bg-[#F2EFE9] flex flex-col justify-between p-5 sm:p-6 space-y-6">
+        <div className="lg:col-span-5 bg-[#F3EBDF] flex flex-col justify-between p-5 sm:p-6 space-y-6">
           <div>
             <div className="aspect-[4/3] w-full overflow-hidden rounded-xl bg-[#EAE0D2]">
               <ResilientImage
@@ -180,65 +221,171 @@ export function ProductModal({
               />
             </div>
 
-            <div className="mt-5 pt-4 border-t border-[#E4DFD5] space-y-3 text-sm">
+            <div className="mt-5 pt-4 border-t border-[#E6DDD1] space-y-3 text-sm">
               <div>
-                <p className="text-xs font-medium text-[#57534E]">Ingredients</p>
-                <p className="mt-1 text-[#1C1917] leading-relaxed">
+                <p className="text-xs font-medium text-[#6D4C3D]">Ingredients</p>
+                <p className="mt-1 text-[#3B2314] leading-relaxed">
                   {product.ingredients.join(', ')}.
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-4 pt-1">
                 <div>
-                  <p className="text-xs font-medium text-[#57534E]">Allergens</p>
-                  <p className="mt-0.5 text-xs text-[#1C1917]">{product.allergens}</p>
+                  <p className="text-xs font-medium text-[#6D4C3D]">Allergens</p>
+                  <p className="mt-0.5 text-xs text-[#3B2314]">{product.allergens}</p>
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-[#57534E]">Serving Tip</p>
-                  <p className="mt-0.5 text-xs text-[#1C1917]">{product.reheatTip}</p>
+                  <p className="text-xs font-medium text-[#6D4C3D]">Serving Tip</p>
+                  <p className="mt-0.5 text-xs text-[#3B2314]">{product.reheatTip}</p>
                 </div>
               </div>
             </div>
           </div>
 
           {/* Customer Reviews & Ratings */}
-          <div className="pt-4 border-t border-[#E4DFD5] space-y-3">
+          <div className="pt-4 border-t border-[#E6DDD1] space-y-3">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold text-[#1C1917] uppercase tracking-wider">
+              <p className="text-xs font-semibold text-[#3B2314] uppercase tracking-wider">
                 Customer Reviews
               </p>
-              <span className="inline-flex items-center gap-1 text-xs font-mono-tabular font-semibold text-[#1C1917]">
+              <span className="inline-flex items-center gap-1 text-xs font-mono-tabular font-semibold text-[#3B2314]">
                 <Star className="w-3.5 h-3.5 fill-[#E06D1F] text-[#E06D1F]" />
                 {avgRating.toFixed(1)} ({totalReviews})
               </span>
             </div>
 
             {reviews.length > 0 ? (
-              <ul className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                {reviews.map((rev) => (
-                  <li
-                    key={rev.id}
-                    className="p-2.5 rounded-xl bg-[#FFFFFF] border border-[#E4DFD5] text-xs"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold text-[#1C1917]">{rev.authorName}</span>
-                      <span className="inline-flex items-center gap-0.5 font-mono-tabular text-[#9A3412]">
-                        {rev.rating}★
-                      </span>
-                    </div>
-                    <p className="mt-1 text-[#57534E] leading-relaxed">{rev.comment}</p>
-                  </li>
-                ))}
+              <ul className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
+                {reviews.map((rev) => {
+                  const canDelete = isOwner || (Boolean(user?.uid) && user?.uid === rev.authorId);
+                  return (
+                    <li
+                      key={rev.id}
+                      className="p-3 rounded-xl bg-[#FFFDF9] border border-[#E6DDD1] text-xs space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="font-semibold text-[#3B2314] truncate">{rev.authorName}</span>
+                          {rev.verifiedPurchase && (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-[#15803D] shrink-0">
+                              <Check className="w-2.5 h-2.5" />
+                              <span>Verified</span>
+                            </span>
+                          )}
+                        </div>
+                        <span className="inline-flex items-center gap-0.5 font-mono-tabular text-[#C45512] shrink-0">
+                          {rev.rating}★
+                        </span>
+                      </div>
+                      {rev.headline && (
+                        <p className="font-semibold text-[#3B2314]">{rev.headline}</p>
+                      )}
+                      <p className="text-[#6D4C3D] leading-relaxed">{rev.comment}</p>
+
+                      {rev.ownerReply && replyingId !== rev.id && (
+                        <div className="mt-1.5 pt-1.5 border-t border-[#F0E7DB] space-y-0.5">
+                          <p className="text-[11px] font-semibold text-[#C45512]">
+                            Reply from {rev.ownerReplyBy || 'Indian Bakery & Cafe'}
+                          </p>
+                          <p className="text-[11px] text-[#3B2314] leading-snug">{rev.ownerReply}</p>
+                        </div>
+                      )}
+
+                      {isOwner && replyingId === rev.id && (
+                        <div className="pt-1.5 space-y-1.5">
+                          <textarea
+                            rows={2}
+                            maxLength={400}
+                            value={replyDraft}
+                            onChange={(e) => setReplyDraft(e.target.value)}
+                            placeholder="Write official bakery reply..."
+                            className="w-full px-2.5 py-1.5 text-[11px] bg-[#FAF5EE] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#C45512]"
+                          />
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReplyingId(null);
+                                setReplyDraft('');
+                              }}
+                              className="text-[11px] text-[#6D4C3D] cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              disabled={replyBusy || !replyDraft.trim()}
+                              onClick={() => void handleSaveReply(rev.id)}
+                              className="px-2.5 py-1 text-[11px] font-medium bg-[#3B2314] text-white rounded-md cursor-pointer"
+                            >
+                              {replyBusy ? 'Saving...' : 'Post Reply'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {(isOwner || canDelete) && (
+                        <div className="pt-1 flex items-center justify-between gap-2 text-[11px]">
+                          <div>
+                            {isOwner && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setReplyingId(rev.id);
+                                  setReplyDraft(rev.ownerReply ?? '');
+                                }}
+                                className="inline-flex items-center gap-1 font-medium text-[#C45512] hover:underline cursor-pointer"
+                              >
+                                <Reply className="w-3 h-3" />
+                                <span>{rev.ownerReply ? 'Edit Reply' : 'Reply'}</span>
+                              </button>
+                            )}
+                          </div>
+                          {canDelete &&
+                            (confirmDeleteId === rev.id ? (
+                              <div className="inline-flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void onDeleteReview(rev.id).then(() => setConfirmDeleteId(null))
+                                  }
+                                  className="px-2 py-0.5 bg-[#B91C1C] text-white rounded cursor-pointer"
+                                >
+                                  Confirm
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(null)}
+                                  className="text-[#6D4C3D] cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteId(rev.id)}
+                                className="inline-flex items-center gap-1 text-[#8D7262] hover:text-[#B91C1C] cursor-pointer"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>Delete</span>
+                              </button>
+                            ))}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             ) : (
-              <p className="text-xs text-[#57534E]">
+              <p className="text-xs text-[#6D4C3D]">
                 Rated {avgRating.toFixed(1)}/5 by Mangalagiri customers. Be the first to add a written review!
               </p>
             )}
 
             <form onSubmit={(e) => void handleReviewFormSubmit(e)} className="space-y-2 pt-1">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-medium text-[#57534E] inline-flex items-center gap-1">
-                  <MessageSquarePlus className="w-3.5 h-3.5 text-[#9A3412]" />
+                <span className="text-xs font-medium text-[#6D4C3D] inline-flex items-center gap-1">
+                  <MessageSquarePlus className="w-3.5 h-3.5 text-[#C45512]" />
                   <span>Rate this item</span>
                 </span>
                 <div className="flex items-center gap-1">
@@ -262,6 +409,15 @@ export function ProductModal({
                 </div>
               </div>
 
+              <input
+                type="text"
+                maxLength={100}
+                value={reviewHeadline}
+                onChange={(e) => setReviewHeadline(e.target.value)}
+                placeholder="Review headline (optional, e.g., Super fresh!)"
+                className="w-full px-3 py-1.5 text-xs bg-[#FFFDF9] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#C45512]"
+              />
+
               <div className="flex gap-2">
                 <input
                   type="text"
@@ -269,12 +425,12 @@ export function ProductModal({
                   value={reviewComment}
                   onChange={(e) => setReviewComment(e.target.value)}
                   placeholder={user ? 'Share taste or freshness feedback...' : 'Sign in to leave a review...'}
-                  className="flex-1 px-3 py-1.5 text-xs bg-[#FFFFFF] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#9A3412]"
+                  className="flex-1 px-3 py-1.5 text-xs bg-[#FFFDF9] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#C45512]"
                 />
                 <button
                   type="submit"
                   disabled={submittingReview}
-                  className="px-3 py-1.5 text-xs font-medium bg-[#1C1917] hover:bg-[#52321E] text-white rounded-lg cursor-pointer shrink-0"
+                  className="px-3 py-1.5 text-xs font-medium bg-[#3B2314] hover:bg-[#52321E] text-white rounded-lg cursor-pointer shrink-0"
                 >
                   {user ? (submittingReview ? 'Saving...' : 'Post') : 'Sign In'}
                 </button>
@@ -289,7 +445,7 @@ export function ProductModal({
         {/* Right Contiguous Purchase & Cake Customization Module */}
         <div className="lg:col-span-7 p-6 sm:p-8 flex flex-col justify-between gap-6">
           <div>
-            <div className="flex items-center flex-wrap gap-2 text-xs text-[#57534E] pr-20">
+            <div className="flex items-center flex-wrap gap-2 text-xs text-[#6D4C3D] pr-20">
               <VegIndicator type={product.vegType ?? 'veg'} showLabel />
               <span aria-hidden="true">·</span>
               <span>{displayCategory}</span>
@@ -300,20 +456,20 @@ export function ProductModal({
               {product.offerLabel && (
                 <>
                   <span aria-hidden="true">·</span>
-                  <span className="font-semibold text-[#9A3412]">{product.offerLabel}</span>
+                  <span className="font-semibold text-[#C45512]">{product.offerLabel}</span>
                 </>
               )}
             </div>
 
             <h2
               id="pdp-title"
-              className="mt-2 font-display text-2xl sm:text-3xl font-semibold text-[#1C1917] tracking-tight"
+              className="mt-2 font-display text-2xl sm:text-3xl font-semibold text-[#3B2314] tracking-tight"
             >
               {product.name}
             </h2>
 
             <div className="mt-2 flex items-baseline gap-2.5">
-              <span className="font-mono-tabular text-xl font-semibold text-[#1C1917]">
+              <span className="font-mono-tabular text-xl font-semibold text-[#3B2314]">
                 {formatMoney(unitPrice, currency)}
               </span>
               {originalUnitPrice && (
@@ -323,13 +479,13 @@ export function ProductModal({
               )}
             </div>
 
-            <p className="mt-3 text-[15px] leading-relaxed text-[#57534E]">
+            <p className="mt-3 text-[15px] leading-relaxed text-[#6D4C3D]">
               {product.fullDescription}
             </p>
 
             {/* Variant / Size Selector */}
             <div className="mt-5">
-              <p className="text-xs font-medium text-[#57534E] mb-2">
+              <p className="text-xs font-medium text-[#6D4C3D] mb-2">
                 Select Size / Quantity
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -343,17 +499,17 @@ export function ProductModal({
                       onClick={() => setSelectedOptionId(option.id)}
                       className={`px-3.5 py-2.5 rounded-xl border text-left transition-colors cursor-pointer ${
                         isSelected
-                          ? 'border-[#9A3412] bg-[#9A3412]/8 text-[#1C1917]'
-                          : 'border-[#E4DFD5] bg-[#FFFFFF] text-[#57534E] hover:border-[#CBBBA7]'
+                          ? 'border-[#C45512] bg-[#C45512]/8 text-[#3B2314]'
+                          : 'border-[#E6DDD1] bg-[#FFFDF9] text-[#6D4C3D] hover:border-[#CBBBA7]'
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2 text-sm font-medium text-[#1C1917]">
+                      <div className="flex items-center justify-between gap-2 text-sm font-medium text-[#3B2314]">
                         <span className="truncate">{option.label}</span>
                         <span className="font-mono-tabular text-xs shrink-0">
                           {formatMoney(optionPrice, currency)}
                         </span>
                       </div>
-                      <p className="mt-0.5 text-xs text-[#57534E] font-mono-tabular">
+                      <p className="mt-0.5 text-xs text-[#6D4C3D] font-mono-tabular">
                         {option.weightLabel}
                       </p>
                     </button>
@@ -364,13 +520,13 @@ export function ProductModal({
 
             {/* Special Occasion & Custom Cake Builder */}
             {isCake && (
-              <div className="mt-5 p-4 rounded-xl bg-[#FFFFFF] border border-[#E4DFD5] space-y-3.5">
+              <div className="mt-5 p-4 rounded-xl bg-[#FFFDF9] border border-[#E6DDD1] space-y-3.5">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 text-xs font-semibold text-[#1C1917]">
-                    <Cake className="w-4 h-4 text-[#9A3412]" />
+                  <div className="flex items-center gap-2 text-xs font-semibold text-[#3B2314]">
+                    <Cake className="w-4 h-4 text-[#C45512]" />
                     <span>Custom Celebration Cake Options</span>
                   </div>
-                  <div className="inline-flex p-0.5 rounded-lg bg-[#F2EFE9]">
+                  <div className="inline-flex p-0.5 rounded-lg bg-[#F3EBDF]">
                     {[
                       { label: '100% Eggless', value: true },
                       { label: 'Classic Sponge', value: false },
@@ -381,8 +537,8 @@ export function ProductModal({
                         onClick={() => setEggless(choice.value)}
                         className={`px-2.5 py-1 text-[11px] font-medium rounded-md cursor-pointer transition-colors ${
                           eggless === choice.value
-                            ? 'bg-[#FFFFFF] text-[#1C1917] shadow-xs'
-                            : 'text-[#57534E]'
+                            ? 'bg-[#FFFDF9] text-[#3B2314] shadow-xs'
+                            : 'text-[#6D4C3D]'
                         }`}
                       >
                         {choice.label}
@@ -393,14 +549,14 @@ export function ProductModal({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label htmlFor="cake-occasion" className="block text-xs text-[#57534E] mb-1">
+                    <label htmlFor="cake-occasion" className="block text-xs text-[#6D4C3D] mb-1">
                       Special Occasion
                     </label>
                     <select
                       id="cake-occasion"
                       value={occasion}
                       onChange={(e) => setOccasion(e.target.value)}
-                      className="w-full px-3 py-2 text-xs bg-[#FAFAF7] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#9A3412]"
+                      className="w-full px-3 py-2 text-xs bg-[#FAF5EE] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#C45512]"
                     >
                       {CAKE_OCCASION_OPTIONS.map((occ) => (
                         <option key={occ} value={occ}>
@@ -411,14 +567,14 @@ export function ProductModal({
                   </div>
 
                   <div>
-                    <label htmlFor="cake-flavor" className="block text-xs text-[#57534E] mb-1">
+                    <label htmlFor="cake-flavor" className="block text-xs text-[#6D4C3D] mb-1">
                       Filling &amp; Flavor
                     </label>
                     <select
                       id="cake-flavor"
                       value={flavor}
                       onChange={(e) => setFlavor(e.target.value)}
-                      className="w-full px-3 py-2 text-xs bg-[#FAFAF7] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#9A3412]"
+                      className="w-full px-3 py-2 text-xs bg-[#FAF5EE] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#C45512]"
                     >
                       {CAKE_FLAVOR_OPTIONS.map((flv) => (
                         <option key={flv} value={flv}>
@@ -430,7 +586,7 @@ export function ProductModal({
                 </div>
 
                 <div>
-                  <label htmlFor="cake-msg" className="block text-xs text-[#57534E] mb-1">
+                  <label htmlFor="cake-msg" className="block text-xs text-[#6D4C3D] mb-1">
                     Message on Cake Plaque (Complimentary)
                   </label>
                   <input
@@ -440,12 +596,12 @@ export function ProductModal({
                     value={cakeMessage}
                     onChange={(e) => setCakeMessage(e.target.value)}
                     placeholder="e.g., Happy Birthday Priya!"
-                    className="w-full px-3 py-2 text-xs bg-[#FAFAF7] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#9A3412]"
+                    className="w-full px-3 py-2 text-xs bg-[#FAF5EE] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#C45512]"
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="cake-design" className="block text-xs text-[#57534E] mb-1">
+                  <label htmlFor="cake-design" className="block text-xs text-[#6D4C3D] mb-1">
                     Custom Design / Frosting Notes (Optional)
                   </label>
                   <input
@@ -455,7 +611,7 @@ export function ProductModal({
                     value={designNote}
                     onChange={(e) => setDesignNote(e.target.value)}
                     placeholder="e.g., Warm cream frosting, gold drip, less sugar"
-                    className="w-full px-3 py-2 text-xs bg-[#FAFAF7] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#9A3412]"
+                    className="w-full px-3 py-2 text-xs bg-[#FAF5EE] border border-[#D6C9B8] rounded-lg focus:outline-none focus:border-[#C45512]"
                   />
                 </div>
               </div>
@@ -463,18 +619,18 @@ export function ProductModal({
           </div>
 
           {/* Quantity & Primary Purchase CTA */}
-          <div className="pt-4 border-t border-[#E4DFD5] flex items-center gap-3">
-            <div className="flex items-center border border-[#D6C9B8] rounded-xl bg-[#FFFFFF]">
+          <div className="pt-4 border-t border-[#E6DDD1] flex items-center gap-3">
+            <div className="flex items-center border border-[#D6C9B8] rounded-xl bg-[#FFFDF9]">
               <button
                 type="button"
                 disabled={!product.inStock}
                 onClick={() => setQuantity((q) => Math.max(1, q - 1))}
                 aria-label="Decrease quantity"
-                className="w-10 h-11 flex items-center justify-center text-[#1C1917] hover:bg-[#F2EFE9] rounded-l-xl transition-colors cursor-pointer disabled:opacity-40"
+                className="w-10 h-11 flex items-center justify-center text-[#3B2314] hover:bg-[#F3EBDF] rounded-l-xl transition-colors cursor-pointer disabled:opacity-40"
               >
                 <Minus className="w-4 h-4" />
               </button>
-              <span className="w-9 text-center font-mono-tabular text-sm font-medium text-[#1C1917]">
+              <span className="w-9 text-center font-mono-tabular text-sm font-medium text-[#3B2314]">
                 {quantity}
               </span>
               <button
@@ -482,7 +638,7 @@ export function ProductModal({
                 disabled={!product.inStock}
                 onClick={() => setQuantity((q) => q + 1)}
                 aria-label="Increase quantity"
-                className="w-10 h-11 flex items-center justify-center text-[#1C1917] hover:bg-[#F2EFE9] rounded-r-xl transition-colors cursor-pointer disabled:opacity-40"
+                className="w-10 h-11 flex items-center justify-center text-[#3B2314] hover:bg-[#F3EBDF] rounded-r-xl transition-colors cursor-pointer disabled:opacity-40"
               >
                 <Plus className="w-4 h-4" />
               </button>
@@ -490,12 +646,13 @@ export function ProductModal({
 
             <button
               type="button"
-              disabled={!product.inStock}
+              disabled={!product.inStock || !activeOption}
               onClick={() => {
+                if (!activeOption) return;
                 onAddToCart(product, activeOption.id, quantity, buildCustomizationSummary());
                 onClose();
               }}
-              className="flex-1 h-11 px-5 bg-[#9A3412] hover:bg-[#7C2D12] disabled:bg-[#9CA3AF] text-white text-sm font-medium rounded-xl transition-colors flex items-center justify-between cursor-pointer whitespace-nowrap disabled:cursor-not-allowed"
+              className="flex-1 h-11 px-5 bg-[#C45512] hover:bg-[#A9450C] disabled:bg-[#9CA3AF] text-white text-sm font-medium rounded-xl transition-colors flex items-center justify-between cursor-pointer whitespace-nowrap disabled:cursor-not-allowed"
             >
               <span>{product.inStock ? 'Add to Cart' : 'Currently Sold Out'}</span>
               <span className="font-mono-tabular">{formatMoney(lineTotal, currency)}</span>

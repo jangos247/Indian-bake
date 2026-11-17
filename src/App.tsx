@@ -1,14 +1,4 @@
-import {
-  FormEvent,
-  lazy,
-  Suspense,
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import {
   collection,
@@ -29,9 +19,7 @@ import {
 import {
   ArrowRight,
   BookmarkPlus,
-  Building2,
   Clock,
-  Flame,
   Heart,
   LogOut,
   MapPin,
@@ -39,16 +27,20 @@ import {
   Search,
   ShieldCheck,
   ShoppingBag,
-  Star,
+  Sparkles,
   Tag,
   Trash2,
   User as UserIcon,
   WifiOff,
   X,
 } from 'lucide-react';
+import { AuthModal } from './components/AuthModal';
 import { AppTab, BottomNav } from './components/BottomNav';
 import { CartCheckoutDrawer } from './components/CartCheckoutDrawer';
+import { CustomerFeedbackBoard } from './components/CustomerFeedbackBoard';
 import { Header } from './components/Header';
+import { OrderTrackerContent, OrderTrackerModal } from './components/OrderTrackerModal';
+import { OwnerStudioModal } from './components/OwnerStudioModal';
 import { ProductCard } from './components/ProductCard';
 import { ProductModal } from './components/ProductModal';
 import { PWAInstallButton } from './components/PWAInstallButton';
@@ -74,6 +66,7 @@ import {
   isBootstrappedOwnerEmail,
   OperationType,
 } from './lib/firebase';
+import { validateUpiReference } from './lib/upi';
 import {
   BakeryCategory,
   BakerySettings,
@@ -87,79 +80,12 @@ import {
   ProductReview,
   SavedAddress,
 } from './types/bakery';
-import {
-  calculateCartSummary,
-  DietaryFilter,
-  filterAndSortProducts,
-  getProductRating,
-  reconcileCartWithProducts,
-  sanitizeText,
-  SortOption,
-  SpotlightFilter,
-} from './utils/bakeryLogic';
-
-const AuthModal = lazy(() =>
-  import('./components/AuthModal').then((m) => ({ default: m.AuthModal }))
-);
-const CorporateQuoteModal = lazy(() =>
-  import('./components/CorporateQuoteModal').then((m) => ({ default: m.CorporateQuoteModal }))
-);
-const OrderTrackerContent = lazy(() =>
-  import('./components/OrderTrackerModal').then((m) => ({ default: m.OrderTrackerContent }))
-);
-const OrderTrackerModal = lazy(() =>
-  import('./components/OrderTrackerModal').then((m) => ({ default: m.OrderTrackerModal }))
-);
-const OwnerStudioModal = lazy(() =>
-  import('./components/OwnerStudioModal').then((m) => ({ default: m.OwnerStudioModal }))
-);
 
 const STORAGE_CART_KEY = 'ibc_bakery_cart_v1';
 const STORAGE_WISHLIST_KEY = 'ibc_bakery_wishlist_v1';
 
 const CATEGORIES_FILTER: ('All' | BakeryCategory)[] = ['All', ...CORE_BAKERY_CATEGORIES];
-const DIETARY_FILTERS: DietaryFilter[] = ['All', 'Pure Veg', 'Vegan', 'Nut-Free'];
-
-const SPOTLIGHT_TABS: { id: SpotlightFilter; label: string }[] = [
-  { id: 'all', label: 'All Items' },
-  { id: 'best_sellers', label: 'Best Sellers' },
-  { id: 'todays_special', label: "Today's Specials" },
-  { id: 'recommended', label: "Chef's Picks" },
-];
-
-const SORT_OPTIONS: { id: SortOption; label: string }[] = [
-  { id: 'featured', label: 'Sort: Featured' },
-  { id: 'price_asc', label: 'Price: Low to High' },
-  { id: 'price_desc', label: 'Price: High to Low' },
-  { id: 'rating_desc', label: 'Top Rated' },
-];
-
-const VERIFIED_VOICES_FALLBACK = [
-  {
-    id: 'voice-1',
-    quote:
-      'Ordered three custom two-tier Belgian truffle cakes for our regional hospital founders day. Sealed chilled delivery reached Widdi Centre before 8:30 AM sharp.',
-    author: 'Dr. Kavitha Narayanan',
-    role: 'Operations Director, Mangalagiri Dental & Medical Trust',
-    rating: 5,
-  },
-  {
-    id: 'voice-2',
-    quote:
-      'Every morning tea service for our 45-person engineering team runs on their crisp paneer puffs and warm Osmania biscuit tins without a single late dispatch.',
-    author: 'Sandeep Varma',
-    role: 'Workplace Admin Lead, Amaravati IT Corridor',
-    rating: 5,
-  },
-  {
-    id: 'voice-3',
-    quote:
-      'Pure ghee gulab jamun boxes and Irani chai flasks arrived piping hot for our Diwali family gathering—identical quality to picking up at the counter.',
-    author: 'Anusha & Karthik Reddy',
-    role: 'Verified Family Customers, Tadepalli',
-    rating: 5,
-  },
-];
+const DIETARY_FILTERS = ['All', 'Pure Veg', 'Vegan', 'Nut-Free'] as const;
 
 const STAGE_SEQUENCE: OrderStage[] = [
   'confirmed',
@@ -215,15 +141,8 @@ export default function App() {
 
   const [activeOrderId, setActiveOrderId] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<'All' | BakeryCategory>('All');
-  const [dietaryFilter, setDietaryFilter] = useState<DietaryFilter>('All');
-  const [spotlightFilter, setSpotlightFilter] = useState<SpotlightFilter>('all');
-  const [offersOnly, setOffersOnly] = useState(false);
-  const [under200Only, setUnder200Only] = useState(false);
-  const [sortBy, setSortBy] = useState<SortOption>('featured');
+  const [dietaryFilter, setDietaryFilter] = useState<(typeof DIETARY_FILTERS)[number]>('All');
   const [searchQuery, setSearchQuery] = useState('');
-  const deferredSearchQuery = useDeferredValue(searchQuery);
-  const [searchDropdownOpen, setSearchDropdownOpen] = useState(false);
-  const homeSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   const [postalCode, setPostalCode] = useState('522503');
   const [deliveryDay, setDeliveryDay] = useState<'Today' | 'Tomorrow'>('Today');
@@ -236,7 +155,6 @@ export default function App() {
   const [isTrackerOpen, setIsTrackerOpen] = useState(false);
   const [isOwnerStudioOpen, setIsOwnerStudioOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isCorporateQuoteOpen, setIsCorporateQuoteOpen] = useState(false);
   const [authInitialMode, setAuthInitialMode] = useState<'customer' | 'owner'>('customer');
   const [justAddedId, setJustAddedId] = useState<string | null>(null);
   const [toastInfo, setToastInfo] = useState<{ message: string; showCartAction?: boolean } | null>(null);
@@ -277,57 +195,6 @@ export default function App() {
       // Ignore storage quota errors
     }
   }, [guestWishlist]);
-
-  // Reconcile persisted cart items with live Firestore menu prices & stock
-  useEffect(() => {
-    if (cart.length === 0 || products.length === 0) return;
-    const { syncedCart, priceChangedCount, hasChanges } = reconcileCartWithProducts(
-      cart,
-      products
-    );
-    if (hasChanges) {
-      setCart(syncedCart);
-      if (priceChangedCount > 0) {
-        showToast('Cart prices updated to latest bakery menu pricing.', true);
-      }
-    }
-  }, [products]);
-
-  // '/' keyboard shortcut to jump to bakery search
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setSearchDropdownOpen(false);
-        return;
-      }
-      if (
-        e.key === '/' &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        !e.altKey &&
-        !isBagOpen &&
-        !activeProductId &&
-        !isOwnerStudioOpen &&
-        !isAuthModalOpen &&
-        !isCorporateQuoteOpen &&
-        !isTrackerOpen
-      ) {
-        const tag = (document.activeElement?.tagName ?? '').toLowerCase();
-        if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
-        e.preventDefault();
-        homeSearchInputRef.current?.focus();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    isBagOpen,
-    activeProductId,
-    isOwnerStudioOpen,
-    isAuthModalOpen,
-    isCorporateQuoteOpen,
-    isTrackerOpen,
-  ]);
 
   // Listen to Firebase Auth state
   useEffect(() => {
@@ -427,11 +294,30 @@ export default function App() {
 
   // Listen to public Customer Reviews in Firestore
   useEffect(() => {
+    const getCreatedMs = (data: Record<string, unknown>): number => {
+      const ts = data.createdAt;
+      if (ts instanceof Timestamp) return ts.toMillis();
+      if (
+        ts &&
+        typeof ts === 'object' &&
+        'toMillis' in ts &&
+        typeof (ts as { toMillis?: unknown }).toMillis === 'function'
+      ) {
+        return (ts as { toMillis: () => number }).toMillis();
+      }
+      return 0;
+    };
+
     const reviewsRef = collection(db, 'reviews');
     const unsub = onSnapshot(
       reviewsRef,
       (snap) => {
-        setReviews(snap.docs.map((d) => d.data() as ProductReview));
+        const sortedDocs = [...snap.docs].sort(
+          (a, b) =>
+            getCreatedMs(b.data() as Record<string, unknown>) -
+            getCreatedMs(a.data() as Record<string, unknown>)
+        );
+        setReviews(sortedDocs.map((d) => d.data() as ProductReview));
       },
       (err) => {
         console.error('Reviews sync error:', err);
@@ -518,6 +404,8 @@ export default function App() {
       (snap) => {
         if (snap.exists()) {
           setCustomerProfile(snap.data() as CustomerProfile);
+        } else {
+          setCustomerProfile(null);
         }
       },
       (err) => {
@@ -583,97 +471,53 @@ export default function App() {
     return map;
   }, [reviews]);
 
-  const getProductRatingStats = (product: Product) =>
-    getProductRating(product, reviewsByProduct[product.id]);
+  const getProductRatingStats = (product: Product) => {
+    const prodReviews = reviewsByProduct[product.id] ?? [];
+    if (prodReviews.length === 0) {
+      return {
+        ratingValue: product.rating ?? 4.8,
+        reviewCount: product.reviewCount ?? 12,
+      };
+    }
+    const avg = prodReviews.reduce((sum, r) => sum + r.rating, 0) / prodReviews.length;
+    return { ratingValue: avg, reviewCount: prodReviews.length };
+  };
 
-  const categoryCounts = useMemo(() => {
-    const counts = {} as Record<BakeryCategory, number>;
-    for (const cat of CORE_BAKERY_CATEGORIES) {
-      counts[cat] = 0;
-    }
-    for (const product of products) {
-      const cat = normalizeCategory(product.category);
-      counts[cat] = (counts[cat] ?? 0) + 1;
-    }
-    return counts;
+  const filteredProducts = useMemo(() => {
+    const queryText = searchQuery.trim().toLowerCase();
+    return products.filter((product) => {
+      const normalized = normalizeCategory(product.category);
+      const matchesCategory =
+        selectedCategory === 'All' || normalized === selectedCategory;
+      const matchesDietary =
+        dietaryFilter === 'All' ||
+        (dietaryFilter === 'Pure Veg'
+          ? (product.vegType ?? 'veg') === 'veg'
+          : product.dietary.includes(dietaryFilter));
+      const matchesSearch =
+        queryText === '' ||
+        product.name.toLowerCase().includes(queryText) ||
+        normalized.toLowerCase().includes(queryText) ||
+        product.shortDescription.toLowerCase().includes(queryText) ||
+        product.ingredients.some((ing) => ing.toLowerCase().includes(queryText));
+      return matchesCategory && matchesDietary && matchesSearch;
+    });
+  }, [products, selectedCategory, dietaryFilter, searchQuery]);
+
+  const bestSellers = useMemo(() => {
+    const marked = products.filter((p) => p.isBestSeller);
+    return (marked.length > 0 ? marked : products).slice(0, 3);
   }, [products]);
 
-  const filteredProducts = useMemo(
-    () =>
-      filterAndSortProducts({
-        products,
-        selectedCategory,
-        dietaryFilter,
-        spotlightFilter,
-        offersOnly,
-        maxPrice: under200Only ? 200 : null,
-        searchQuery: deferredSearchQuery,
-        sortBy,
-        reviewsByProduct,
-      }),
-    [
-      products,
-      selectedCategory,
-      dietaryFilter,
-      spotlightFilter,
-      offersOnly,
-      under200Only,
-      deferredSearchQuery,
-      sortBy,
-      reviewsByProduct,
-    ]
-  );
+  const todaysSpecials = useMemo(() => {
+    const marked = products.filter((p) => p.isTodaysSpecial);
+    return (marked.length > 0 ? marked : products.slice(3, 6)).slice(0, 3);
+  }, [products]);
 
-  const searchSuggestions = useMemo(() => {
-    const q = deferredSearchQuery.trim().toLowerCase();
-    if (!q) return [];
-    return products
-      .filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          normalizeCategory(p.category).toLowerCase().includes(q) ||
-          p.ingredients.some((ing) => ing.toLowerCase().includes(q))
-      )
-      .slice(0, 5);
-  }, [products, deferredSearchQuery]);
-
-  const unavailableProductIds = useMemo(() => {
-    const productMap = new Map(products.map((p) => [p.id, p]));
-    const ids = new Set<string>();
-    for (const item of cart) {
-      const live = productMap.get(item.productId);
-      if (!live || !live.inStock) {
-        ids.add(item.productId);
-      }
-    }
-    return ids;
-  }, [cart, products]);
-
-  const cartQuantityByProductId = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const item of cart) {
-      map[item.productId] = (map[item.productId] ?? 0) + item.quantity;
-    }
-    return map;
-  }, [cart]);
-
-  const showcaseVoices = useMemo(() => {
-    const liveWithText = reviews
-      .filter((r) => r.comment && r.comment.trim().length > 10)
-      .slice(0, 3)
-      .map((rev) => {
-        const prodName = products.find((p) => p.id === rev.productId)?.name;
-        return {
-          id: rev.id,
-          quote: rev.comment,
-          author: rev.authorName,
-          role: prodName ? `Verified Customer · Ordered ${prodName}` : 'Verified Bakery Customer',
-          rating: rev.rating,
-        };
-      });
-    if (liveWithText.length >= 3) return liveWithText;
-    return [...liveWithText, ...VERIFIED_VOICES_FALLBACK].slice(0, 3);
-  }, [reviews, products]);
+  const recommendedProducts = useMemo(() => {
+    const marked = products.filter((p) => p.isRecommended);
+    return (marked.length > 0 ? marked : products).slice(0, 3);
+  }, [products]);
 
   const wishlistedProducts = useMemo(
     () => products.filter((p) => wishlistIds.includes(p.id)),
@@ -694,9 +538,7 @@ export default function App() {
 
   const bagCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const bagSubtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
-  const activeOrders = orders.filter((o) => o.stage !== 'delivered');
-  const activeOrdersCount = activeOrders.length;
-  const activeLiveOrder = activeOrders[0];
+  const activeOrdersCount = orders.filter((o) => o.stage !== 'delivered').length;
   const deliveryZone = resolveDeliveryZone(postalCode, settings);
   const activeSlot =
     settings.deliverySlots.find((s) => s.id === selectedSlotId) ??
@@ -763,46 +605,12 @@ export default function App() {
     }, 1200);
   };
 
-  const handleQuickAdd = useCallback((product: Product) => {
+  const handleQuickAdd = (product: Product) => {
     const defaultOption = product.options[0];
     if (defaultOption) {
       handleAddToCart(product, defaultOption.id, 1);
     }
-  }, []);
-
-  const handleStepCartQuantity = useCallback((product: Product, delta: number) => {
-    const defaultOption = product.options[0];
-    if (!defaultOption) return;
-    const defaultCartItemId = `${product.id}::${defaultOption.id}`;
-
-    setCart((prev) => {
-      const targetItem =
-        prev.find((i) => i.cartItemId === defaultCartItemId) ??
-        prev.find((i) => i.productId === product.id);
-      if (!targetItem) {
-        if (delta <= 0 || !product.inStock) return prev;
-        return [
-          ...prev,
-          {
-            cartItemId: defaultCartItemId,
-            productId: product.id,
-            name: product.name,
-            category: product.category,
-            image: product.image,
-            optionId: defaultOption.id,
-            optionLabel: defaultOption.label,
-            unitPrice: product.price + defaultOption.priceDelta,
-            quantity: delta,
-          },
-        ];
-      }
-      return prev
-        .map((i) =>
-          i.cartItemId === targetItem.cartItemId ? { ...i, quantity: i.quantity + delta } : i
-        )
-        .filter((i) => i.quantity > 0);
-    });
-  }, []);
+  };
 
   const handleUpdateQuantity = (cartItemId: string, delta: number) => {
     setCart((prev) =>
@@ -818,11 +626,6 @@ export default function App() {
 
   const handleRemoveItem = (cartItemId: string) => {
     setCart((prev) => prev.filter((item) => item.cartItemId !== cartItemId));
-  };
-
-  const handleRemoveUnavailableItems = () => {
-    setCart((prev) => prev.filter((item) => !unavailableProductIds.has(item.productId)));
-    showToast('Removed sold-out items from cart.');
   };
 
   const handleToggleWishlist = async (productId: string) => {
@@ -859,18 +662,12 @@ export default function App() {
     if (!user) return;
     const currentList = customerProfile?.savedAddresses ?? [];
     const newAddr: SavedAddress = {
+      ...addr,
       id: `addr-${Date.now()}`,
-      label: sanitizeText(addr.label, 30) || 'Home',
-      fullName: sanitizeText(addr.fullName, 80),
-      phone: sanitizeText(addr.phone, 24),
-      streetAddress: sanitizeText(addr.streetAddress, 160),
-      apartment: sanitizeText(addr.apartment, 60),
-      postalCode: sanitizeText(addr.postalCode, 16),
-      instructions: sanitizeText(addr.instructions, 200),
     };
     const deduplicated = currentList.filter(
       (a) =>
-        a.streetAddress.trim().toLowerCase() !== newAddr.streetAddress.toLowerCase()
+        a.streetAddress.trim().toLowerCase() !== addr.streetAddress.trim().toLowerCase()
     );
     const updatedAddresses = [newAddr, ...deduplicated].slice(0, 10);
     try {
@@ -879,8 +676,7 @@ export default function App() {
         {
           uid: user.uid,
           email: resolvedUserEmail,
-          fullName:
-            sanitizeText(customerProfile?.fullName || newAddr.fullName || user.displayName || 'Customer', 80),
+          fullName: customerProfile?.fullName || addr.fullName || user.displayName || 'Customer',
           savedAddresses: updatedAddresses,
           updatedAt: serverTimestamp(),
         },
@@ -911,24 +707,61 @@ export default function App() {
     }
   };
 
-  const handleSubmitReview = async (productId: string, rating: number, comment: string) => {
+  const handleSubmitReview = async (
+    productId: string,
+    rating: number,
+    comment: string,
+    headline?: string
+  ) => {
     if (!user) return;
-    const cleanComment = sanitizeText(comment, 400);
-    if (!cleanComment) return;
-    const clampedRating = Math.max(1, Math.min(5, Math.round(rating)));
     const reviewId = `rev-${Date.now()}-${Math.floor(Math.random() * 999)}`;
+    const verifiedPurchase = orders.some(
+      (o) =>
+        o.customerId === user.uid &&
+        (productId === 'store-feedback' ||
+          o.items.some((i) => i.productId === productId))
+    );
+    const payload: Record<string, unknown> = {
+      id: reviewId,
+      productId,
+      authorId: user.uid,
+      authorName: user.displayName || customerProfile?.fullName || 'Customer',
+      rating,
+      comment: comment.trim(),
+      verifiedPurchase,
+      createdAt: serverTimestamp(),
+    };
+    if (headline?.trim()) {
+      payload.headline = headline.trim();
+    }
     try {
-      await setDoc(doc(db, 'reviews', reviewId), {
-        id: reviewId,
-        productId: sanitizeText(productId, 80),
-        authorId: user.uid,
-        authorName: sanitizeText(user.displayName || customerProfile?.fullName || 'Customer', 80),
-        rating: clampedRating,
-        comment: cleanComment,
-        createdAt: serverTimestamp(),
-      });
+      await setDoc(doc(db, 'reviews', reviewId), payload);
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, `reviews/${reviewId}`);
+    }
+  };
+
+  const handleReplyReview = async (reviewId: string, replyText: string) => {
+    if (!isOwner) return;
+    const cleaned = replyText.trim();
+    if (!cleaned) return;
+    try {
+      await updateDoc(doc(db, 'reviews', reviewId), {
+        ownerReply: cleaned,
+        ownerReplyBy: user?.displayName || settings.bakeryName || 'Indian Bakery & Cafe',
+        ownerRepliedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `reviews/${reviewId}`);
+    }
+  };
+
+  const handleDeleteReview = async (reviewId: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, 'reviews', reviewId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `reviews/${reviewId}`);
     }
   };
 
@@ -940,87 +773,49 @@ export default function App() {
       return;
     }
 
-    // Authoritative pre-flight integrity verification against live menu catalog & rules
-    const productMap = new Map(products.map((p) => [p.id, p]));
-    const verifiedItems: CartItem[] = [];
-    for (const item of orderInput.items) {
-      const liveProd = productMap.get(item.productId);
-      if (!liveProd || !liveProd.inStock) {
-        throw new Error(`"${item.name}" is currently sold out. Please update your cart.`);
-      }
-      const matchedOpt =
-        liveProd.options.find((o) => o.id === item.optionId) ?? liveProd.options[0];
-      const safeQty = Math.max(1, Math.min(100, Math.round(item.quantity)));
-      verifiedItems.push({
-        ...item,
-        name: sanitizeText(liveProd.name, 100),
-        optionLabel: sanitizeText(matchedOpt?.label ?? item.optionLabel, 40),
-        unitPrice: liveProd.price + (matchedOpt?.priceDelta ?? 0),
-        quantity: safeQty,
-      });
-    }
-
-    const cleanPin = sanitizeText(orderInput.customer.postalCode, 16);
-    const zone = resolveDeliveryZone(cleanPin, settings);
-    const verifiedPricing = calculateCartSummary({
-      items: verifiedItems,
-      settings,
-      appliedPromoCode: orderInput.promoCode ?? '',
-      zoneFee: zone.fee,
-      tip: Math.max(0, orderInput.tip),
-    });
-
-    const sanitizedCustomer = {
-      fullName: sanitizeText(orderInput.customer.fullName, 80),
-      phone: sanitizeText(orderInput.customer.phone, 24),
-      streetAddress: sanitizeText(orderInput.customer.streetAddress, 160),
-      apartment: sanitizeText(orderInput.customer.apartment, 60),
-      postalCode: cleanPin,
-      instructions: sanitizeText(orderInput.customer.instructions, 200),
-    };
-
+    const requiresUpiLock = orderInput.paymentMethod === 'upi_prepaid' && orderInput.total > 0;
     const orderPayload: Record<string, unknown> = {
-      id: sanitizeText(orderInput.id, 40),
-      createdAtLabel: sanitizeText(orderInput.createdAtLabel, 40),
-      deliveryDay: orderInput.deliveryDay,
-      deliveryWindow: sanitizeText(orderInput.deliveryWindow, 40),
-      neighborhood: sanitizeText(zone.neighborhood, 100),
-      customer: sanitizedCustomer,
-      paymentMethod: orderInput.paymentMethod,
-      paymentStatus: orderInput.paymentStatus ?? 'pending',
-      items: verifiedItems,
-      subtotal: verifiedPricing.subtotal,
-      deliveryFee: verifiedPricing.deliveryFee,
-      tip: Math.max(0, orderInput.tip),
-      total: verifiedPricing.total,
-      stage: 'confirmed',
-      courierName: sanitizeText(orderInput.courierName, 80) || 'Assigned upon dispatch',
+      ...orderInput,
       customerId: user.uid,
       customerEmail: resolvedUserEmail,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
+    if (!orderInput.discount) delete orderPayload.discount;
+    if (!orderInput.promoCode) delete orderPayload.promoCode;
+    if (!orderInput.tax) delete orderPayload.tax;
+    if (!orderInput.note) delete orderPayload.note;
 
-    if (verifiedPricing.discount > 0 && verifiedPricing.appliedOfferCode) {
-      orderPayload.discount = verifiedPricing.discount;
-      orderPayload.promoCode = sanitizeText(verifiedPricing.appliedOfferCode, 30);
-    }
-    if (verifiedPricing.taxAmount > 0) {
-      orderPayload.tax = verifiedPricing.taxAmount;
-    }
-    if (orderInput.note) {
-      const cleanNote = sanitizeText(orderInput.note, 240);
-      if (cleanNote) orderPayload.note = cleanNote;
-    }
-    if (orderInput.upiReference) {
-      const cleanUtr = sanitizeText(orderInput.upiReference, 40);
-      if (cleanUtr) orderPayload.upiReference = cleanUtr;
-    }
+    if (requiresUpiLock) {
+      const utrCheck = validateUpiReference(orderInput.upiReference ?? '');
+      if (!utrCheck.valid) {
+        throw new Error(utrCheck.reason || 'Please enter a valid 12-digit UPI UTR.');
+      }
+      orderPayload.upiReference = utrCheck.cleaned;
+      orderPayload.paymentStatus = 'verification_pending';
 
-    try {
-      await setDoc(doc(db, 'orders', orderInput.id), orderPayload);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `orders/${orderInput.id}`);
+      try {
+        const batch = writeBatch(db);
+        batch.set(doc(db, 'orders', orderInput.id), orderPayload);
+        batch.set(doc(db, 'utr_claims', utrCheck.cleaned), {
+          utr: utrCheck.cleaned,
+          orderId: orderInput.id,
+          customerId: user.uid,
+          amount: orderInput.total,
+          createdAt: serverTimestamp(),
+        });
+        await batch.commit();
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `utr_claims/${utrCheck.cleaned}`);
+      }
+    } else {
+      delete orderPayload.upiReference;
+      orderPayload.paymentStatus = 'pending';
+      try {
+        await setDoc(doc(db, 'orders', orderInput.id), orderPayload);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `orders/${orderInput.id}`);
+      }
     }
 
     try {
@@ -1029,12 +824,12 @@ export default function App() {
         {
           uid: user.uid,
           email: resolvedUserEmail,
-          fullName: sanitizedCustomer.fullName,
-          phone: sanitizedCustomer.phone,
-          streetAddress: sanitizedCustomer.streetAddress,
-          apartment: sanitizedCustomer.apartment,
-          postalCode: sanitizedCustomer.postalCode,
-          instructions: sanitizedCustomer.instructions,
+          fullName: orderInput.customer.fullName,
+          phone: orderInput.customer.phone,
+          streetAddress: orderInput.customer.streetAddress,
+          apartment: orderInput.customer.apartment,
+          postalCode: orderInput.customer.postalCode,
+          instructions: orderInput.customer.instructions,
           updatedAt: serverTimestamp(),
         },
         { merge: true }
@@ -1043,6 +838,7 @@ export default function App() {
       handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`);
     }
 
+    setAppliedPromoCode('');
     setActiveOrderId(orderInput.id);
     setCart([]);
     setIsBagOpen(false);
@@ -1053,8 +849,9 @@ export default function App() {
   const handleAdvanceOrderStage = async (orderId: string) => {
     if (!isOwner) return;
     const target = orders.find((o) => o.id === orderId);
-    if (!target) return;
+    if (!target || target.stage === 'delivered') return;
     const currentIndex = STAGE_SEQUENCE.indexOf(target.stage);
+    if (currentIndex === -1) return;
     const nextStage =
       STAGE_SEQUENCE[Math.min(STAGE_SEQUENCE.length - 1, currentIndex + 1)];
     const courierName =
@@ -1231,10 +1028,6 @@ export default function App() {
     setShowNewAddressForm(false);
   };
 
-  const handleOpenProductByProd = useCallback((prod: Product) => {
-    setActiveProductId(prod.id);
-  }, []);
-
   const renderProductGrid = (list: Product[]) => (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-7">
       {list.map((product) => {
@@ -1246,12 +1039,10 @@ export default function App() {
             currency={settings.currency}
             isWishlisted={wishlistIds.includes(product.id)}
             isJustAdded={justAddedId === product.id}
-            cartQuantity={cartQuantityByProductId[product.id] ?? 0}
             ratingValue={stats.ratingValue}
             reviewCount={stats.reviewCount}
-            onOpenProduct={handleOpenProductByProd}
+            onOpenProduct={(prod) => setActiveProductId(prod.id)}
             onQuickAdd={handleQuickAdd}
-            onStepCartQuantity={handleStepCartQuantity}
             onToggleWishlist={(id) => void handleToggleWishlist(id)}
           />
         );
@@ -1260,16 +1051,16 @@ export default function App() {
   );
 
   return (
-    <div id="top" className="min-h-screen flex flex-col bg-[#FAFAF7] text-[#1C1917] pb-16 md:pb-0">
-      {/* Slim Dismissible Festival / Offer Banner (non-sticky, <= 40px) */}
+    <div id="top" className="min-h-screen flex flex-col bg-[#FAF5EE] text-[#3B2314] pb-16 md:pb-0">
+      {/* Slim Festival / Offer Banner */}
       {settings.festivalBanner?.active && !bannerDismissed && (
-        <div className="bg-[#1C1917] text-white px-4 h-9 sm:h-10 flex items-center justify-center gap-3 text-xs">
-          <div className="flex items-center gap-2 min-w-0">
+        <div className="bg-[#3B2314] text-white px-4 h-9 sm:h-10 flex items-center justify-center gap-3 text-xs">
+          <div className="flex items-center gap-2 truncate">
             <Tag className="w-3.5 h-3.5 text-[#FDBA74] shrink-0" />
-            <span className="hidden sm:inline font-semibold text-[#FDBA74] shrink-0">
+            <span className="font-semibold text-[#FDBA74] shrink-0">
               {settings.festivalBanner.campaignName}
             </span>
-            <span className="hidden sm:inline text-white/50">·</span>
+            <span className="hidden sm:inline text-white/60">·</span>
             <span className="truncate text-white/95">{settings.festivalBanner.headline}</span>
           </div>
 
@@ -1280,7 +1071,7 @@ export default function App() {
                 setAppliedPromoCode(settings.festivalBanner.promoCode);
                 setIsBagOpen(true);
               }}
-              className="px-2.5 py-0.5 rounded-md bg-[#9A3412] hover:bg-[#7C2D12] text-white font-mono-tabular font-medium shrink-0 cursor-pointer whitespace-nowrap"
+              className="px-2.5 py-0.5 rounded-md bg-[#C45512] hover:bg-[#A9450C] text-white font-mono-tabular font-medium shrink-0 cursor-pointer"
             >
               Use {settings.festivalBanner.promoCode}
             </button>
@@ -1299,6 +1090,7 @@ export default function App() {
 
       <Header
         bakeryName={settings.bakeryName}
+        neighborhood={deliveryZone.neighborhood}
         bagCount={bagCount}
         activeTab={activeTab}
         user={user}
@@ -1309,23 +1101,23 @@ export default function App() {
       />
 
       <main className="flex-1">
-        {/* TAB 1: HOME SCREEN — 4 DISCIPLINED FLAGSHIP SECTIONS */}
+        {/* TAB 1: HOME SCREEN */}
         {activeTab === 'home' && (
           <>
-            {/* SECTION 1: Storefront Fulfillment Bar, Hero Split & 4-Column Operations Strip */}
-            <section className="max-w-[1200px] mx-auto px-4 sm:px-6 pt-5 pb-10 lg:pt-7 lg:pb-12">
-              {/* Fulfillment Zone & Quick Search Strip */}
-              <div className="p-3 sm:p-4 bg-white border border-[#E4DFD5] rounded-2xl flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-                <div className="flex items-center gap-3 flex-wrap">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-xl bg-[#9A3412]/10 text-[#9A3412] flex items-center justify-center shrink-0">
+            {/* Delivery Location Bar & Search Input */}
+            <section className="max-w-[1200px] mx-auto px-4 sm:px-6 pt-4 sm:pt-6">
+              <div className="p-3 sm:p-4 bg-[#FFFDF9] border border-[#E6DDD1] rounded-2xl flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+                {/* Location Selector */}
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-[#C45512]/10 text-[#C45512] flex items-center justify-center shrink-0">
                       <MapPin className="w-4 h-4" />
                     </div>
                     <div>
-                      <span className="block text-[11px] text-[#57534E] font-medium">
+                      <span className="block text-[11px] text-[#6D4C3D] font-medium">
                         Delivering to ({deliveryZone.etaMinutes})
                       </span>
-                      <span className="text-xs sm:text-sm font-semibold text-[#1C1917]">
+                      <span className="text-xs sm:text-sm font-semibold text-[#3B2314]">
                         {deliveryZone.neighborhood}
                       </span>
                     </div>
@@ -1342,7 +1134,7 @@ export default function App() {
                         : postalCode
                     }
                     onChange={(e) => setPostalCode(e.target.value)}
-                    className="px-2.5 py-1.5 text-xs font-mono-tabular bg-[#FAFAF7] border border-[#D6D0C4] rounded-xl text-[#1C1917] focus:outline-none focus:border-[#9A3412]"
+                    className="px-2.5 py-1.5 text-xs font-mono-tabular bg-[#FAF5EE] border border-[#D6C9B8] rounded-xl text-[#3B2314] focus:outline-none focus:border-[#C45512]"
                   >
                     {settings.deliveryZones.map((zone) => (
                       <option key={zone.postalPrefix} value={zone.postalPrefix}>
@@ -1359,132 +1151,44 @@ export default function App() {
                   </select>
                 </div>
 
+                {/* Search Input */}
                 <div className="relative flex-1 md:max-w-md">
-                  <Search className="w-4 h-4 text-[#57534E] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <Search className="w-4 h-4 text-[#6D4C3D] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
-                    ref={homeSearchInputRef}
                     type="search"
                     value={searchQuery}
-                    onFocus={() => setSearchDropdownOpen(true)}
-                    onBlur={() => window.setTimeout(() => setSearchDropdownOpen(false), 180)}
-                    onChange={(e) => {
-                      setSearchQuery(e.target.value);
-                      setSearchDropdownOpen(true);
-                    }}
-                    placeholder="Search cakes, puffs, Osmania biscuits, chai..."
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search cakes, snacks, sweets..."
                     aria-label="Search cakes, snacks, sweets"
-                    className="w-full pl-10 pr-16 py-2 text-sm bg-[#FAFAF7] border border-[#D6D0C4] rounded-xl text-[#1C1917] placeholder:text-[#78716C] focus:outline-none focus:border-[#9A3412]"
+                    className="w-full pl-10 pr-4 py-2.5 text-sm bg-[#FAF5EE] border border-[#D6C9B8] rounded-xl text-[#3B2314] placeholder:text-[#8D7262] focus:outline-none focus:border-[#C45512]"
                   />
-                  {searchQuery ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSearchQuery('');
-                        homeSearchInputRef.current?.focus();
-                      }}
-                      aria-label="Clear search query"
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-md text-[#57534E] hover:text-[#1C1917] cursor-pointer"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  ) : (
-                    <kbd
-                      aria-hidden="true"
-                      className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono-tabular text-[#78716C] bg-white border border-[#E4DFD5] rounded absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
-                    >
-                      /
-                    </kbd>
-                  )}
-
-                  {/* Instant Search Autocomplete Dropdown */}
-                  {searchDropdownOpen && searchQuery.trim().length > 0 && (
-                    <div
-                      role="listbox"
-                      aria-label="Instant bakery search results"
-                      className="absolute left-0 right-0 top-full mt-2 z-40 bg-white border border-[#E4DFD5] rounded-2xl shadow-xl overflow-hidden"
-                    >
-                      {searchSuggestions.length === 0 ? (
-                        <div className="p-4 text-xs text-[#57534E]">
-                          No items matching &ldquo;{searchQuery}&rdquo;. Try cake, puff, cookies, or chai.
-                        </div>
-                      ) : (
-                        <ul className="divide-y divide-[#F2EFE9]">
-                          {searchSuggestions.map((prod) => (
-                            <li
-                              key={prod.id}
-                              className="p-2.5 hover:bg-[#FAF5EE] flex items-center justify-between gap-3"
-                            >
-                              <button
-                                type="button"
-                                onMouseDown={(e) => {
-                                  e.preventDefault();
-                                  setActiveProductId(prod.id);
-                                  setSearchDropdownOpen(false);
-                                }}
-                                className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer"
-                              >
-                                <div className="w-10 h-10 rounded-lg overflow-hidden bg-[#F2EFE9] shrink-0">
-                                  <ResilientImage
-                                    src={prod.image}
-                                    alt={prod.name}
-                                    className="w-full h-full object-cover"
-                                  />
-                                </div>
-                                <div className="min-w-0">
-                                  <p className="text-xs font-semibold text-[#1C1917] truncate">
-                                    {prod.name}
-                                  </p>
-                                  <p className="text-[11px] text-[#57534E] font-mono-tabular">
-                                    {normalizeCategory(prod.category)} ·{' '}
-                                    {formatMoney(prod.price, settings.currency)}
-                                  </p>
-                                </div>
-                              </button>
-                              {prod.inStock &&
-                                !prod.isCakeCustomizable &&
-                                normalizeCategory(prod.category) !== 'Cakes' && (
-                                  <button
-                                    type="button"
-                                    onMouseDown={(e) => {
-                                      e.preventDefault();
-                                      handleQuickAdd(prod);
-                                    }}
-                                    className="px-2.5 py-1 text-[11px] font-semibold bg-[#9A3412] text-white rounded-lg hover:bg-[#7C2D12] cursor-pointer shrink-0"
-                                  >
-                                    + Add
-                                  </button>
-                                )}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  )}
                 </div>
               </div>
+            </section>
 
-              {/* Hero Split Grid */}
-              <div className="mt-6 lg:mt-8 grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-stretch">
+            {/* Hero & Promotional Banner */}
+            <section className="max-w-[1200px] mx-auto px-4 sm:px-6 pt-6 pb-8 lg:pt-8 lg:pb-12">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-stretch">
                 <div className="lg:col-span-6 flex flex-col justify-between py-1">
                   <div>
                     <div className="flex items-center gap-3.5">
                       <img
                         src={BAKERY_LOGO_URL}
-                        alt="Indian Bakery and Cafe Flagship Crest"
-                        className="w-14 h-14 sm:w-16 sm:h-16 rounded-full object-cover border border-[#D6D0C4] shrink-0"
+                        alt="IBC Indian Bakery & Cafe"
+                        className="w-14 h-14 sm:w-16 sm:h-16 rounded-full object-cover border border-[#D6C9B8] shadow-xs shrink-0"
                       />
                       <div>
-                        <p className="text-xs font-semibold tracking-wide text-[#9A3412]">
-                          Widdi Centre, Mangalagiri · Fresh Daily Kitchen
+                        <p className="text-xs font-semibold tracking-wide text-[#C45512]">
+                          INDIAN BAKERY &amp; CAFE · WIDDI CENTRE
                         </p>
-                        <p className="text-xs text-[#1C1917] font-medium mt-0.5">
+                        <p className="text-xs text-[#3B2314] font-medium mt-0.5">
                           {settings.address}
                         </p>
-                        <p className="text-xs text-[#57534E] mt-0.5 font-mono-tabular">
-                          Order Desk:{' '}
+                        <p className="text-xs text-[#6D4C3D] mt-0.5 font-mono-tabular">
+                          Call:{' '}
                           <a
                             href={`tel:${settings.phone}`}
-                            className="hover:text-[#9A3412] underline underline-offset-2"
+                            className="hover:text-[#C45512] underline underline-offset-2"
                           >
                             {settings.phone}
                           </a>
@@ -1493,7 +1197,7 @@ export default function App() {
                               {' · '}
                               <a
                                 href={`tel:${settings.secondaryPhone}`}
-                                className="hover:text-[#9A3412] underline underline-offset-2"
+                                className="hover:text-[#C45512] underline underline-offset-2"
                               >
                                 {settings.secondaryPhone}
                               </a>
@@ -1503,56 +1207,52 @@ export default function App() {
                       </div>
                     </div>
 
-                    <h1 className="mt-5 font-display text-[clamp(2rem,3.6vw,3.1rem)] leading-[1.12] font-bold tracking-tight text-[#1C1917] text-balance">
-                      Artisanal Indian baking, custom celebration cakes &amp; Irani chai.
+                    <h1 className="mt-5 font-display text-[clamp(1.85rem,3.6vw,3rem)] leading-[1.15] font-bold tracking-tight text-[#3B2314] text-balance">
+                      Warm Indian bakery classics, custom cakes &amp; Irani chai at your doorstep.
                     </h1>
 
-                    <p className="mt-4 text-[15px] sm:text-base leading-relaxed text-[#57534E] max-w-[54ch]">
-                      Baked every morning in small batches at our Widdi Centre kitchen—from layered truffle cakes and golden paneer puffs to Osmania biscuits, pure ghee sweets, and piping-hot Irani chai.
+                    <p className="mt-3.5 text-[15px] sm:text-base leading-relaxed text-[#6D4C3D] max-w-[54ch]">
+                      Celebration cakes baked to order, crisp masala puffs, Hyderabadi Osmania biscuits, pure ghee sweets, and piping-hot Irani chai—crafted fresh every morning in Mangalagiri.
                     </p>
                   </div>
 
-                  <div className="mt-6 pt-5 border-t border-[#E4DFD5] flex flex-wrap items-center gap-3">
+                  <div className="mt-6 pt-5 border-t border-[#E6DDD1] flex flex-wrap items-center gap-3">
                     <a
                       href="#menu"
-                      className="inline-flex items-center gap-2 px-5 py-3 bg-[#9A3412] hover:bg-[#7C2D12] text-white text-sm font-medium rounded-xl transition-colors whitespace-nowrap shrink-0"
+                      className="inline-flex items-center gap-2 px-5 py-3 bg-[#C45512] hover:bg-[#A9450C] text-white text-sm font-medium rounded-xl transition-colors whitespace-nowrap"
                     >
-                      <span>Order Fresh Menu</span>
+                      <span>Order Fresh Today</span>
                       <ArrowRight className="w-4 h-4" />
                     </a>
 
                     <button
                       type="button"
-                      onClick={() => setIsCorporateQuoteOpen(true)}
-                      className="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium text-[#1C1917] bg-white border border-[#D6D0C4] hover:border-[#1C1917] rounded-xl transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                      onClick={() => handleSelectCategoryShortcut('Cakes')}
+                      className="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium text-[#3B2314] bg-[#FFFDF9] border border-[#D6C9B8] hover:border-[#C45512] rounded-xl transition-colors cursor-pointer whitespace-nowrap"
                     >
-                      <Building2 className="w-4 h-4 text-[#1B4332]" />
-                      <span>Corporate &amp; Bulk</span>
+                      <Sparkles className="w-4 h-4 text-[#C45512]" />
+                      <span>Custom Cakes</span>
                     </button>
 
                     <PWAInstallButton />
                   </div>
                 </div>
 
-                {/* Right Media Showcase */}
+                {/* Promotional Showcase Image Card */}
                 <div className="lg:col-span-6">
-                  <div className="relative w-full h-full min-h-[260px] aspect-[4/3] overflow-hidden rounded-2xl bg-[#F2EFE9] border border-[#E4DFD5]">
+                  <div className="relative w-full h-full min-h-[260px] aspect-[4/3] overflow-hidden rounded-2xl bg-[#EAE0D2] border border-[#E6DDD1] shadow-sm">
                     <ResilientImage
                       src={HERO_IMAGE}
                       alt="Freshly baked celebration cakes, Indian sweets, puffs, and bakery loaves"
-                      priority
                       className="w-full h-full object-cover"
                     />
-                    <div className="absolute inset-x-0 bottom-0 p-5 bg-gradient-to-t from-[#1C1917]/85 via-[#1C1917]/40 to-transparent text-white flex items-end justify-between gap-4">
+                    <div className="absolute inset-x-0 bottom-0 p-4 sm:p-5 bg-gradient-to-t from-[#2A180D]/85 via-[#2A180D]/45 to-transparent text-white flex items-end justify-between gap-3">
                       <div>
-                        <p className="text-xs font-medium text-[#FDBA74]">
-                          Complimentary Local Dispatch
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-[#FDBA74]">
+                          Today&apos;s Bakery Offer
                         </p>
-                        <p className="text-base sm:text-lg font-display font-semibold">
-                          Free delivery on orders above{' '}
-                          <span className="font-mono-tabular">
-                            {formatMoney(settings.freeDeliveryThreshold, settings.currency)}
-                          </span>
+                        <p className="text-sm sm:text-base font-display font-semibold">
+                          Free Home Delivery above {formatMoney(settings.freeDeliveryThreshold, settings.currency)}
                         </p>
                       </div>
                       <button
@@ -1561,7 +1261,7 @@ export default function App() {
                           setAppliedPromoCode(settings.festivalBanner.promoCode || 'FESTIVE15');
                           setIsBagOpen(true);
                         }}
-                        className="px-4 py-2 text-xs font-semibold bg-[#9A3412] hover:bg-[#7C2D12] text-white rounded-xl cursor-pointer shrink-0 whitespace-nowrap"
+                        className="px-3.5 py-2 text-xs font-medium bg-[#C45512] hover:bg-[#A9450C] text-white rounded-xl cursor-pointer shrink-0"
                       >
                         Claim Offer
                       </button>
@@ -1570,12 +1270,12 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 4-Column Operations & Trust Strip */}
-              <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 bg-white border border-[#E4DFD5] rounded-2xl divide-y sm:divide-y-0 sm:divide-x divide-[#E4DFD5]">
+              {/* Quick Slot & Order Status Strip */}
+              <div className="mt-8 grid grid-cols-1 sm:grid-cols-3 bg-[#FFFDF9] border border-[#E6DDD1] rounded-2xl divide-y sm:divide-y-0 sm:divide-x divide-[#E6DDD1]">
                 <div className="p-4 flex flex-col justify-between gap-2">
-                  <span className="text-xs font-medium text-[#57534E] flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-[#9A3412]" />
-                    <span>Same-Day Dispatch Windows</span>
+                  <span className="text-xs font-medium text-[#6D4C3D] flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-[#C45512]" />
+                    <span>Scheduled Delivery Window</span>
                   </span>
                   <div className="flex items-center gap-1.5 flex-wrap">
                     {settings.deliverySlots.map((slot) => (
@@ -1583,34 +1283,34 @@ export default function App() {
                         key={slot.id}
                         type="button"
                         onClick={() => setSelectedSlotId(slot.id)}
-                        className={`px-2.5 py-1 text-xs font-mono-tabular rounded-lg border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                        className={`px-2.5 py-1 text-xs font-mono-tabular rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
                           slot.id === activeSlot.id
-                            ? 'border-[#9A3412] bg-[#9A3412] text-white'
-                            : 'border-[#E4DFD5] bg-[#FAFAF7] text-[#57534E] hover:border-[#D6D0C4]'
+                            ? 'border-[#C45512] bg-[#C45512] text-white'
+                            : 'border-[#E6DDD1] bg-[#FAF5EE] text-[#6D4C3D] hover:border-[#CBBBA7]'
                         }`}
                       >
                         {slot.window.split(' – ')[0]}
                       </button>
                     ))}
                   </div>
-                  <p className="text-xs text-[#57534E] font-mono-tabular">
-                    {deliveryDay}: {activeSlot.label} · {activeSlot.spotsRemaining} slots open
+                  <p className="text-xs text-[#6D4C3D]">
+                    {deliveryDay}: {activeSlot.label} · {activeSlot.spotsRemaining} spots left
                   </p>
                 </div>
 
                 <div className="p-4 flex flex-col justify-between gap-1.5">
-                  <span className="text-xs font-medium text-[#57534E]">Payment Infrastructure</span>
-                  <p className="text-sm font-semibold text-[#1C1917]">
+                  <span className="text-xs font-medium text-[#6D4C3D]">Accepted Payments</span>
+                  <p className="text-sm font-semibold text-[#3B2314]">
                     UPI · GPay · PhonePe · Cards · COD
                   </p>
-                  <p className="text-xs text-[#57534E] font-mono-tabular">
-                    {formatMoney(settings.deliveryFee, settings.currency)} dispatch · Free over{' '}
+                  <p className="text-xs text-[#6D4C3D]">
+                    {formatMoney(settings.deliveryFee, settings.currency)} local delivery · Free over{' '}
                     {formatMoney(settings.freeDeliveryThreshold, settings.currency)}
                   </p>
                 </div>
 
                 <div className="p-4 flex flex-col justify-between gap-1.5">
-                  <span className="text-xs font-medium text-[#57534E]">Live Order Tracking</span>
+                  <span className="text-xs font-medium text-[#6D4C3D]">Real-Time Order Tracking</span>
                   <button
                     type="button"
                     onClick={() => handleTabSwitch('orders')}
@@ -1618,219 +1318,199 @@ export default function App() {
                   >
                     {latestOrder ? (
                       <>
-                        <p className="text-sm font-semibold text-[#1C1917] group-hover:text-[#9A3412] transition-colors">
+                        <p className="text-sm font-semibold text-[#3B2314] group-hover:text-[#C45512] transition-colors">
                           Order <span className="font-mono-tabular">#{latestOrder.id}</span>
                         </p>
-                        <p className="text-xs text-[#9A3412] underline underline-offset-2 mt-0.5">
-                          Track preparation &amp; rider live
+                        <p className="text-xs text-[#C45512] underline underline-offset-2 mt-0.5">
+                          View live kitchen &amp; rider status
                         </p>
                       </>
                     ) : (
                       <>
-                        <p className="text-sm font-semibold text-[#1C1917] group-hover:text-[#9A3412] transition-colors">
-                          5-Step Kitchen-to-Door View
+                        <p className="text-sm font-semibold text-[#3B2314] group-hover:text-[#C45512] transition-colors">
+                          5-Step Live Status
                         </p>
-                        <p className="text-xs text-[#9A3412] underline underline-offset-2 mt-0.5">
-                          {user ? 'Open live order tracker' : 'Sign in to view orders'}
+                        <p className="text-xs text-[#C45512] underline underline-offset-2 mt-0.5">
+                          {user ? 'Open live order tracker' : 'Sign in to track orders'}
                         </p>
                       </>
                     )}
-                  </button>
-                </div>
-
-                <div className="p-4 flex flex-col justify-between gap-1.5">
-                  <span className="text-xs font-medium text-[#57534E]">Corporate &amp; Events</span>
-                  <p className="text-sm font-semibold text-[#1C1917]">
-                    GST Billing &amp; Gift Hampers
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setIsCorporateQuoteOpen(true)}
-                    className="text-left text-xs font-semibold text-[#1B4332] hover:underline underline-offset-2 cursor-pointer"
-                  >
-                    Request bulk catering quote →
                   </button>
                 </div>
               </div>
             </section>
 
-            {/* SECTION 2: Unified Curated Collection & Full Menu */}
+            {/* 8 Bakery Categories Grid */}
+            <section className="max-w-[1200px] mx-auto px-4 sm:px-6 pb-10">
+              <div className="flex items-end justify-between gap-4 mb-5">
+                <div>
+                  <h2 className="font-display text-2xl sm:text-3xl font-semibold text-[#3B2314] tracking-tight">
+                    Browse by Category
+                  </h2>
+                  <p className="text-sm text-[#6D4C3D] mt-1">
+                    Eight freshly stocked bakery departments crafted every day.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleTabSwitch('categories')}
+                  className="text-xs font-semibold text-[#C45512] hover:underline underline-offset-4 cursor-pointer whitespace-nowrap"
+                >
+                  View All 8
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 sm:gap-5">
+                {CATEGORY_DETAILS.map((cat) => {
+                  const isActive = selectedCategory === cat.name;
+                  return (
+                    <button
+                      key={cat.name}
+                      type="button"
+                      onClick={() => handleSelectCategoryShortcut(cat.name)}
+                      className={`group text-left bg-[#FFFDF9] border rounded-2xl overflow-hidden transition-all duration-200 hover:-translate-y-0.5 cursor-pointer ${
+                        isActive
+                          ? 'border-[#C45512] ring-2 ring-[#C45512]/20'
+                          : 'border-[#E6DDD1] hover:border-[#CBBBA7]'
+                      }`}
+                    >
+                      <div className="aspect-[16/10] w-full overflow-hidden bg-[#F3EBDF]">
+                        <ResilientImage
+                          src={cat.image}
+                          alt={cat.name}
+                          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                        />
+                      </div>
+                      <div className="p-3 sm:p-3.5">
+                        <p className="text-sm font-semibold text-[#3B2314] truncate">{cat.name}</p>
+                        <p className="text-[11px] text-[#6D4C3D] truncate mt-0.5">{cat.subtitle}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            {/* Show Filtered Results immediately if user typed search or picked category */}
+            {(searchQuery.trim() !== '' || selectedCategory !== 'All' || dietaryFilter !== 'All') ? null : (
+              <>
+                {/* Best Sellers Section */}
+                <section className="max-w-[1200px] mx-auto px-4 sm:px-6 py-8 border-t border-[#E6DDD1]">
+                  <div className="flex items-end justify-between gap-4 mb-6">
+                    <div>
+                      <h2 className="font-display text-2xl sm:text-3xl font-semibold text-[#3B2314] tracking-tight">
+                        Best Sellers
+                      </h2>
+                      <p className="text-sm text-[#6D4C3D] mt-1">
+                        Most ordered favourites across Mangalagiri &amp; Tadepalli.
+                      </p>
+                    </div>
+                  </div>
+                  {renderProductGrid(bestSellers)}
+                </section>
+
+                {/* Today's Special Section */}
+                <section className="max-w-[1200px] mx-auto px-4 sm:px-6 py-8 border-t border-[#E6DDD1]">
+                  <div className="flex items-end justify-between gap-4 mb-6">
+                    <div>
+                      <h2 className="font-display text-2xl sm:text-3xl font-semibold text-[#3B2314] tracking-tight">
+                        Today&apos;s Special
+                      </h2>
+                      <p className="text-sm text-[#6D4C3D] mt-1">
+                        Chef-picked seasonal highlights straight from the deck ovens.
+                      </p>
+                    </div>
+                  </div>
+                  {renderProductGrid(todaysSpecials)}
+                </section>
+
+                {/* Recommended Section */}
+                <section className="max-w-[1200px] mx-auto px-4 sm:px-6 py-8 border-t border-[#E6DDD1]">
+                  <div className="flex items-end justify-between gap-4 mb-6">
+                    <div>
+                      <h2 className="font-display text-2xl sm:text-3xl font-semibold text-[#3B2314] tracking-tight">
+                        Recommended for You
+                      </h2>
+                      <p className="text-sm text-[#6D4C3D] mt-1">
+                        Pair warm pastries and sweets with Irani chai for family evenings.
+                      </p>
+                    </div>
+                  </div>
+                  {renderProductGrid(recommendedProducts)}
+                </section>
+              </>
+            )}
+
+            {/* Complete Daily Menu with Interactive Category & Dietary Filter */}
             <section
               id="menu"
-              className="scroll-mt-20 max-w-[1200px] mx-auto px-4 sm:px-6 py-10 border-t border-[#E4DFD5]"
+              className="max-w-[1200px] mx-auto px-4 sm:px-6 py-10 border-t border-[#E6DDD1]"
             >
               <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-5">
                 <div>
-                  <h2 className="font-display text-2xl sm:text-3xl font-semibold text-[#1C1917] tracking-tight">
-                    Curated Collection &amp; Full Menu
+                  <h2 className="font-display text-2xl sm:text-3xl font-semibold text-[#3B2314] tracking-tight">
+                    Full Bakery Menu
                   </h2>
-                  <p className="mt-1.5 text-sm text-[#57534E]">
-                    Showing <span className="font-mono-tabular font-semibold text-[#1C1917]">{filteredProducts.length}</span> of{' '}
-                    <span className="font-mono-tabular">{products.length}</span> fresh items · Click any bake for pack sizes &amp; cake customization.
+                  <p className="mt-1.5 text-sm text-[#6D4C3D] max-w-xl">
+                    Tap any cake or item for sizes, cake messages, ingredients, and customer reviews.
                   </p>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-3">
-                  {/* Dietary Segmented Filter */}
-                  <div className="inline-flex items-center p-1 rounded-xl bg-[#F2EFE9] border border-[#E4DFD5]">
-                    {DIETARY_FILTERS.map((diet) => (
-                      <button
-                        key={diet}
-                        type="button"
-                        onClick={() => setDietaryFilter(diet)}
-                        className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                          dietaryFilter === diet
-                            ? 'bg-white text-[#1C1917] shadow-xs'
-                            : 'text-[#57534E] hover:text-[#1C1917]'
-                        }`}
-                      >
-                        {diet}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Sort Control */}
-                  <select
-                    aria-label="Sort menu items"
-                    value={sortBy}
-                    onChange={(e) => setSortBy(e.target.value as SortOption)}
-                    className="px-3 py-2 text-xs font-medium bg-white border border-[#D6D0C4] rounded-xl text-[#1C1917] focus:outline-none focus:border-[#9A3412] cursor-pointer"
-                  >
-                    {SORT_OPTIONS.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
+                {/* Dietary Segmented Filter */}
+                <div className="inline-flex items-center p-1 rounded-xl bg-[#EAE0D2] border border-[#E6DDD1] self-start">
+                  {DIETARY_FILTERS.map((diet) => (
+                    <button
+                      key={diet}
+                      type="button"
+                      onClick={() => setDietaryFilter(diet)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                        dietaryFilter === diet
+                          ? 'bg-[#FFFDF9] text-[#3B2314] shadow-xs'
+                          : 'text-[#6D4C3D] hover:text-[#3B2314]'
+                      }`}
+                    >
+                      {diet}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              {/* Spotlight & Department Filter Toolbar */}
-              <div className="mt-5 flex flex-col gap-3">
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div className="flex flex-wrap items-center gap-2 max-w-full">
-                    <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-[#F2EFE9] border border-[#E4DFD5] overflow-x-auto max-w-full">
-                      {SPOTLIGHT_TABS.map((tab) => (
-                        <button
-                          key={tab.id}
-                          type="button"
-                          onClick={() => setSpotlightFilter(tab.id)}
-                          className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                            spotlightFilter === tab.id
-                              ? 'bg-[#1C1917] text-white'
-                              : 'text-[#57534E] hover:text-[#1C1917]'
-                          }`}
-                        >
-                          {tab.label}
-                        </button>
-                      ))}
-                    </div>
-
+              {/* Category Filter Bar */}
+              <div className="mt-5 flex items-center gap-2 overflow-x-auto no-scrollbar pb-2">
+                {CATEGORIES_FILTER.map((category) => {
+                  const active = selectedCategory === category;
+                  return (
                     <button
+                      key={category}
                       type="button"
-                      aria-pressed={offersOnly}
-                      onClick={() => setOffersOnly((prev) => !prev)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-xl border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                        offersOnly
-                          ? 'bg-[#9A3412] border-[#9A3412] text-white'
-                          : 'bg-white border-[#E4DFD5] text-[#57534E] hover:border-[#9A3412] hover:text-[#1C1917]'
+                      onClick={() => setSelectedCategory(category)}
+                      className={`px-4 py-2 text-xs sm:text-sm font-medium rounded-xl border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                        active
+                          ? 'bg-[#C45512] border-[#C45512] text-white'
+                          : 'bg-[#FFFDF9] border-[#E6DDD1] text-[#6D4C3D] hover:border-[#CBBBA7] hover:text-[#3B2314]'
                       }`}
                     >
-                      Offers Only
+                      {category}
                     </button>
-
-                    <button
-                      type="button"
-                      aria-pressed={under200Only}
-                      onClick={() => setUnder200Only((prev) => !prev)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-xl border transition-colors cursor-pointer whitespace-nowrap shrink-0 font-mono-tabular ${
-                        under200Only
-                          ? 'bg-[#1B4332] border-[#1B4332] text-white'
-                          : 'bg-white border-[#E4DFD5] text-[#57534E] hover:border-[#1B4332] hover:text-[#1C1917]'
-                      }`}
-                    >
-                      Under {settings.currency}200
-                    </button>
-
-                    {(selectedCategory !== 'All' ||
-                      dietaryFilter !== 'All' ||
-                      spotlightFilter !== 'all' ||
-                      offersOnly ||
-                      under200Only ||
-                      searchQuery !== '') && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedCategory('All');
-                          setDietaryFilter('All');
-                          setSpotlightFilter('all');
-                          setOffersOnly(false);
-                          setUnder200Only(false);
-                          setSortBy('featured');
-                          setSearchQuery('');
-                        }}
-                        className="px-2.5 py-1.5 text-xs font-medium text-[#9A3412] hover:underline cursor-pointer whitespace-nowrap"
-                      >
-                        Reset
-                      </button>
-                    )}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => handleTabSwitch('categories')}
-                    className="text-xs font-semibold text-[#9A3412] hover:underline underline-offset-4 cursor-pointer whitespace-nowrap shrink-0"
-                  >
-                    Explore Visual Category Guide →
-                  </button>
-                </div>
-
-                {/* 8-Department Category Bar */}
-                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
-                  {CATEGORIES_FILTER.map((category) => {
-                    const active = selectedCategory === category;
-                    const count =
-                      category === 'All' ? products.length : categoryCounts[category] ?? 0;
-                    return (
-                      <button
-                        key={category}
-                        type="button"
-                        onClick={() => setSelectedCategory(category)}
-                        className={`px-3.5 py-2 text-xs sm:text-sm font-medium rounded-xl border transition-colors cursor-pointer whitespace-nowrap shrink-0 font-mono-tabular ${
-                          active
-                            ? 'bg-[#9A3412] border-[#9A3412] text-white'
-                            : 'bg-white border-[#E4DFD5] text-[#57534E] hover:border-[#D6D0C4] hover:text-[#1C1917]'
-                        }`}
-                      >
-                        {category} ({count})
-                      </button>
-                    );
-                  })}
-                </div>
+                  );
+                })}
               </div>
 
               {filteredProducts.length === 0 ? (
-                <div className="mt-8 py-12 px-6 bg-white border border-[#E4DFD5] rounded-2xl text-center">
-                  <p className="font-display text-lg font-semibold text-[#1C1917]">
-                    No bakery items match your current filters
-                  </p>
-                  <p className="text-xs text-[#57534E] mt-1">
-                    Reset department, dietary, or spotlight filters to browse the entire menu.
+                <div className="mt-8 py-12 px-6 bg-[#FFFDF9] border border-[#E6DDD1] rounded-2xl text-center">
+                  <p className="font-display text-lg font-semibold text-[#3B2314]">
+                    No bakery items match your current search or filter
                   </p>
                   <button
                     type="button"
                     onClick={() => {
                       setSelectedCategory('All');
                       setDietaryFilter('All');
-                      setSpotlightFilter('all');
-                      setOffersOnly(false);
-                      setUnder200Only(false);
-                      setSortBy('featured');
                       setSearchQuery('');
                     }}
-                    className="mt-4 px-4 py-2 bg-[#9A3412] hover:bg-[#7C2D12] text-white text-xs font-medium rounded-xl cursor-pointer"
+                    className="mt-4 px-4 py-2 bg-[#C45512] text-white text-xs font-medium rounded-xl hover:bg-[#A9450C] cursor-pointer"
                   >
-                    Reset All Filters
+                    Show All Items
                   </button>
                 </div>
               ) : (
@@ -1838,85 +1518,21 @@ export default function App() {
               )}
             </section>
 
-            {/* SECTION 3: Craftsmanship Standards, Corporate Hospitality & Verified Voices */}
-            <section className="max-w-[1200px] mx-auto px-4 sm:px-6 py-12 border-t border-[#E4DFD5] space-y-10">
-              <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
-                <div>
-                  <h2 className="font-display text-2xl sm:text-3xl font-semibold text-[#1C1917] tracking-tight">
-                    Our Kitchen Standards &amp; Hospitality
-                  </h2>
-                  <p className="mt-1.5 text-sm text-[#57534E] max-w-2xl">
-                    Built for everyday family warmth and enterprise reliability—combining heritage recipes with standardized batch discipline.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsCorporateQuoteOpen(true)}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-[#1B4332] bg-white border border-[#D6D0C4] hover:border-[#1B4332] rounded-xl cursor-pointer whitespace-nowrap shrink-0 self-start md:self-auto"
-                >
-                  <Building2 className="w-4 h-4" />
-                  <span>Book Catering / Bulk Boxes</span>
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="p-6 bg-white border border-[#E4DFD5] rounded-2xl space-y-2.5">
-                  <h3 className="font-display text-lg font-semibold text-[#1C1917]">
-                    01. Small-Batch Morning Baking
-                  </h3>
-                  <p className="text-sm text-[#57534E] leading-relaxed">
-                    Deck ovens fire up at 05:30 daily using cultured butter, single-origin dark couverture chocolate, and pure cow ghee—zero frozen stock carryovers.
-                  </p>
-                </div>
-
-                <div className="p-6 bg-white border border-[#E4DFD5] rounded-2xl space-y-2.5">
-                  <h3 className="font-display text-lg font-semibold text-[#1C1917]">
-                    02. Sealed Cold-Chain &amp; Hygiene
-                  </h3>
-                  <p className="text-sm text-[#57534E] leading-relaxed">
-                    Celebration cakes travel in chilled shock-guarded boxes while savoury puffs and Irani chai flasks arrive in insulated tamper-sealed thermal packs.
-                  </p>
-                </div>
-
-                <div className="p-6 bg-white border border-[#E4DFD5] rounded-2xl space-y-2.5">
-                  <h3 className="font-display text-lg font-semibold text-[#1C1917]">
-                    03. Corporate &amp; Occasion Catering
-                  </h3>
-                  <p className="text-sm text-[#57534E] leading-relaxed">
-                    Dedicated GST invoicing, custom corporate sleeves, and scheduled multi-drop dispatch for office tea breaks, weddings, and festive gifting across Guntur &amp; Vijayawada.
-                  </p>
-                </div>
-              </div>
-
-              {/* Verified Customer & Corporate Voices (Claim-to-Proof Adjacency) */}
-              <div className="space-y-4">
-                <h3 className="font-display text-xl font-semibold text-[#1C1917]">
-                  Trusted Across Mangalagiri, Tadepalli &amp; Amaravati
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {showcaseVoices.map((voice) => (
-                    <blockquote
-                      key={voice.id}
-                      className="p-5 bg-white border border-[#E4DFD5] rounded-2xl flex flex-col justify-between gap-4"
-                    >
-                      <div className="space-y-2.5">
-                        <div className="flex items-center gap-1 text-[#9A3412]" aria-label={`${voice.rating} out of 5 stars`}>
-                          {Array.from({ length: voice.rating }).map((_, idx) => (
-                            <Star key={idx} className="w-3.5 h-3.5 fill-[#9A3412]" />
-                          ))}
-                        </div>
-                        <p className="text-sm text-[#1C1917] leading-relaxed">
-                          &ldquo;{voice.quote}&rdquo;
-                        </p>
-                      </div>
-                      <footer className="pt-3 border-t border-[#F2EFE9]">
-                        <p className="text-xs font-semibold text-[#1C1917]">{voice.author}</p>
-                        <p className="text-xs text-[#57534E] mt-0.5">{voice.role}</p>
-                      </footer>
-                    </blockquote>
-                  ))}
-                </div>
-              </div>
+            {/* Amazon-Style Customer Feedback & Store Reviews */}
+            <section className="max-w-[1200px] mx-auto px-4 sm:px-6 pb-16">
+              <CustomerFeedbackBoard
+                reviews={reviews}
+                products={products}
+                user={user}
+                isOwner={isOwner}
+                onRequestSignIn={() => {
+                  setAuthInitialMode('customer');
+                  setIsAuthModalOpen(true);
+                }}
+                onSubmitReview={handleSubmitReview}
+                onReplyReview={handleReplyReview}
+                onDeleteReview={handleDeleteReview}
+              />
             </section>
           </>
         )}
@@ -1925,30 +1541,34 @@ export default function App() {
         {activeTab === 'categories' && (
           <section className="max-w-[1200px] mx-auto px-4 sm:px-6 py-8 space-y-8">
             <div>
-              <h1 className="font-display text-3xl font-semibold text-[#1C1917]">
-                Bakery Departments
+              <h1 className="font-display text-3xl font-semibold text-[#3B2314]">
+                Bakery Categories
               </h1>
-              <p className="text-sm text-[#57534E] mt-1">
-                Select a department below to explore fresh cakes, pastries, puffs, sweets, and beverages.
+              <p className="text-sm text-[#6D4C3D] mt-1">
+                Select a category below to explore fresh bakes, snacks, sweets, and beverages.
               </p>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               {CATEGORY_DETAILS.map((cat) => {
-                const count = categoryCounts[cat.name] ?? 0;
+                const count = products.filter(
+                  (p) => normalizeCategory(p.category) === cat.name
+                ).length;
                 const active = selectedCategory === cat.name;
                 return (
                   <button
                     key={cat.name}
                     type="button"
-                    onClick={() => setSelectedCategory(active ? 'All' : cat.name)}
-                    className={`group text-left bg-white border rounded-2xl overflow-hidden transition-all cursor-pointer ${
+                    onClick={() =>
+                      setSelectedCategory(active ? 'All' : cat.name)
+                    }
+                    className={`group text-left bg-[#FFFDF9] border rounded-2xl overflow-hidden transition-all cursor-pointer ${
                       active
-                        ? 'border-[#9A3412] ring-2 ring-[#9A3412]/20'
-                        : 'border-[#E4DFD5] hover:border-[#D6D0C4]'
+                        ? 'border-[#C45512] ring-2 ring-[#C45512]/20'
+                        : 'border-[#E6DDD1] hover:border-[#CBBBA7]'
                     }`}
                   >
-                    <div className="aspect-[16/10] bg-[#F2EFE9] overflow-hidden">
+                    <div className="aspect-[16/10] bg-[#F3EBDF] overflow-hidden">
                       <ResilientImage
                         src={cat.image}
                         alt={cat.name}
@@ -1956,8 +1576,8 @@ export default function App() {
                       />
                     </div>
                     <div className="p-3.5">
-                      <p className="text-sm font-semibold text-[#1C1917]">{cat.name}</p>
-                      <p className="text-xs text-[#57534E] mt-0.5 font-mono-tabular">
+                      <p className="text-sm font-semibold text-[#3B2314]">{cat.name}</p>
+                      <p className="text-xs text-[#6D4C3D] mt-0.5 font-mono-tabular">
                         {count} {count === 1 ? 'item' : 'items'}
                       </p>
                     </div>
@@ -1966,16 +1586,16 @@ export default function App() {
               })}
             </div>
 
-            <div className="pt-4 border-t border-[#E4DFD5] space-y-5">
+            <div className="pt-4 border-t border-[#E6DDD1] space-y-5">
               <div className="flex items-center justify-between">
-                <h2 className="font-display text-2xl font-semibold text-[#1C1917]">
+                <h2 className="font-display text-2xl font-semibold text-[#3B2314]">
                   {selectedCategory === 'All' ? 'All Bakery Items' : selectedCategory}
                 </h2>
                 {selectedCategory !== 'All' && (
                   <button
                     type="button"
                     onClick={() => setSelectedCategory('All')}
-                    className="text-xs font-medium text-[#9A3412] hover:underline cursor-pointer"
+                    className="text-xs font-medium text-[#C45512] hover:underline cursor-pointer"
                   >
                     Show All Categories
                   </button>
@@ -1996,17 +1616,17 @@ export default function App() {
         {activeTab === 'search' && (
           <section className="max-w-[1200px] mx-auto px-4 sm:px-6 py-8 space-y-6">
             <div>
-              <h1 className="font-display text-3xl font-semibold text-[#1C1917]">
+              <h1 className="font-display text-3xl font-semibold text-[#3B2314]">
                 Search Our Bakery
               </h1>
-              <p className="text-sm text-[#57534E] mt-1">
+              <p className="text-sm text-[#6D4C3D] mt-1">
                 Find celebration cakes, savoury puffs, Osmania biscuits, sweets, or chai combos.
               </p>
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3">
               <div className="relative flex-1">
-                <Search className="w-4 h-4 text-[#57534E] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <Search className="w-4 h-4 text-[#6D4C3D] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="search"
                   autoFocus
@@ -2014,11 +1634,11 @@ export default function App() {
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Search cakes, snacks, sweets..."
                   aria-label="Search cakes, snacks, sweets"
-                  className="w-full pl-11 pr-4 py-3 text-sm bg-white border border-[#D6D0C4] rounded-xl text-[#1C1917] focus:outline-none focus:border-[#9A3412]"
+                  className="w-full pl-11 pr-4 py-3 text-sm bg-[#FFFDF9] border border-[#D6C9B8] rounded-xl text-[#3B2314] focus:outline-none focus:border-[#C45512]"
                 />
               </div>
 
-              <div className="inline-flex items-center p-1 rounded-xl bg-[#F2EFE9] border border-[#E4DFD5] self-start">
+              <div className="inline-flex items-center p-1 rounded-xl bg-[#EAE0D2] border border-[#E6DDD1] self-start">
                 {DIETARY_FILTERS.map((diet) => (
                   <button
                     key={diet}
@@ -2026,8 +1646,8 @@ export default function App() {
                     onClick={() => setDietaryFilter(diet)}
                     className={`px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
                       dietaryFilter === diet
-                        ? 'bg-white text-[#1C1917] shadow-xs'
-                        : 'text-[#57534E]'
+                        ? 'bg-[#FFFDF9] text-[#3B2314] shadow-xs'
+                        : 'text-[#6D4C3D]'
                     }`}
                   >
                     {diet}
@@ -2038,13 +1658,13 @@ export default function App() {
 
             {/* Popular Searches */}
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-medium text-[#57534E]">Popular:</span>
+              <span className="text-xs font-medium text-[#6D4C3D]">Popular:</span>
               {QUICK_SEARCH_TERMS.map((term) => (
                 <button
                   key={term}
                   type="button"
                   onClick={() => setSearchQuery(term)}
-                  className="px-3 py-1.5 text-xs bg-white border border-[#E4DFD5] hover:border-[#9A3412] rounded-xl text-[#1C1917] cursor-pointer"
+                  className="px-3 py-1.5 text-xs bg-[#FFFDF9] border border-[#E6DDD1] hover:border-[#C45512] rounded-xl text-[#3B2314] cursor-pointer"
                 >
                   {term}
                 </button>
@@ -2057,7 +1677,7 @@ export default function App() {
                     setDietaryFilter('All');
                     setSelectedCategory('All');
                   }}
-                  className="px-3 py-1.5 text-xs text-[#9A3412] font-medium hover:underline cursor-pointer"
+                  className="px-3 py-1.5 text-xs text-[#C45512] font-medium hover:underline cursor-pointer"
                 >
                   Clear Search
                 </button>
@@ -2065,11 +1685,11 @@ export default function App() {
             </div>
 
             {filteredProducts.length === 0 ? (
-              <div className="py-12 px-6 bg-white border border-[#E4DFD5] rounded-2xl text-center">
-                <p className="font-display text-lg font-semibold text-[#1C1917]">
+              <div className="py-12 px-6 bg-[#FFFDF9] border border-[#E6DDD1] rounded-2xl text-center">
+                <p className="font-display text-lg font-semibold text-[#3B2314]">
                   No matches for &ldquo;{searchQuery}&rdquo;
                 </p>
-                <p className="text-xs text-[#57534E] mt-1">
+                <p className="text-xs text-[#6D4C3D] mt-1">
                   Try searching for cake, puff, cookies, jamun, or bread.
                 </p>
               </div>
@@ -2083,30 +1703,28 @@ export default function App() {
         {activeTab === 'orders' && (
           <section className="max-w-[960px] mx-auto px-4 sm:px-6 py-8 space-y-6">
             <div>
-              <h1 className="font-display text-3xl font-semibold text-[#1C1917]">
+              <h1 className="font-display text-3xl font-semibold text-[#3B2314]">
                 Orders &amp; Live Tracking
               </h1>
-              <p className="text-sm text-[#57534E] mt-1">
+              <p className="text-sm text-[#6D4C3D] mt-1">
                 Real-time updates from Order Placed → Preparing Your Order → Ready for Delivery → Out for Delivery → Delivered.
               </p>
             </div>
 
-            <Suspense fallback={<div className="py-12 text-center text-xs text-[#57534E]">Loading live order tracker...</div>}>
-              <OrderTrackerContent
-                user={user}
-                isOwner={isOwner}
-                currency={settings.currency}
-                orders={orders}
-                activeOrderId={activeOrderId}
-                onSelectOrder={setActiveOrderId}
-                onAdvanceStage={handleAdvanceOrderStage}
-                onReorder={handleReorder}
-                onRequestSignIn={() => {
-                  setAuthInitialMode('customer');
-                  setIsAuthModalOpen(true);
-                }}
-              />
-            </Suspense>
+            <OrderTrackerContent
+              user={user}
+              isOwner={isOwner}
+              currency={settings.currency}
+              orders={orders}
+              activeOrderId={activeOrderId}
+              onSelectOrder={setActiveOrderId}
+              onAdvanceStage={handleAdvanceOrderStage}
+              onReorder={handleReorder}
+              onRequestSignIn={() => {
+                setAuthInitialMode('customer');
+                setIsAuthModalOpen(true);
+              }}
+            />
           </section>
         )}
 
@@ -2114,19 +1732,19 @@ export default function App() {
         {activeTab === 'profile' && (
           <section className="max-w-[1000px] mx-auto px-4 sm:px-6 py-8 space-y-8">
             {/* Account Header Card */}
-            <div className="p-6 bg-white border border-[#E4DFD5] rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="p-6 bg-[#FFFDF9] border border-[#E6DDD1] rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex items-center gap-4">
-                <div className="w-14 h-14 rounded-full bg-[#F2EFE9] border border-[#E4DFD5] flex items-center justify-center text-[#9A3412] shrink-0">
+                <div className="w-14 h-14 rounded-full bg-[#F3EBDF] border border-[#E6DDD1] flex items-center justify-center text-[#C45512] shrink-0">
                   <UserIcon className="w-6 h-6" />
                 </div>
                 <div>
-                  <p className="text-xs font-semibold text-[#9A3412]">
+                  <p className="text-xs font-semibold text-[#C45512]">
                     {user ? (isOwner ? 'Verified Bakery Owner' : 'Valued Customer') : 'Guest Shopper'}
                   </p>
-                  <h1 className="font-display text-2xl font-semibold text-[#1C1917]">
+                  <h1 className="font-display text-2xl font-semibold text-[#3B2314]">
                     {user ? user.displayName || 'Account Holder' : 'Sign in to Your Account'}
                   </h1>
-                  <p className="text-xs text-[#57534E] font-mono-tabular">
+                  <p className="text-xs text-[#6D4C3D] font-mono-tabular">
                     {resolvedUserEmail || 'Save addresses, favourites & reorder in 1 tap'}
                   </p>
                 </div>
@@ -2139,7 +1757,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setIsOwnerStudioOpen(true)}
-                        className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium bg-[#9A3412] hover:bg-[#7C2D12] text-white rounded-xl cursor-pointer"
+                        className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium bg-[#C45512] hover:bg-[#A9450C] text-white rounded-xl cursor-pointer"
                       >
                         <ShieldCheck className="w-4 h-4" />
                         <span>Open Owner Studio</span>
@@ -2151,7 +1769,7 @@ export default function App() {
                         setAuthInitialMode('customer');
                         setIsAuthModalOpen(true);
                       }}
-                      className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium bg-[#F2EFE9] hover:bg-[#E4DFD5] text-[#1C1917] rounded-xl cursor-pointer"
+                      className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium bg-[#F3EBDF] hover:bg-[#E6DDD1] text-[#3B2314] rounded-xl cursor-pointer"
                     >
                       <LogOut className="w-3.5 h-3.5" />
                       <span>Account / Switch</span>
@@ -2165,7 +1783,7 @@ export default function App() {
                         setAuthInitialMode('customer');
                         setIsAuthModalOpen(true);
                       }}
-                      className="px-4 py-2.5 text-xs font-medium bg-[#1C1917] hover:bg-[#33302D] text-white rounded-xl cursor-pointer"
+                      className="px-4 py-2.5 text-xs font-medium bg-[#3B2314] hover:bg-[#52321E] text-white rounded-xl cursor-pointer"
                     >
                       Customer Login / Register
                     </button>
@@ -2175,7 +1793,7 @@ export default function App() {
                         setAuthInitialMode('owner');
                         setIsAuthModalOpen(true);
                       }}
-                      className="px-4 py-2.5 text-xs font-medium border border-[#D6D0C4] bg-white hover:border-[#9A3412] text-[#1C1917] rounded-xl cursor-pointer"
+                      className="px-4 py-2.5 text-xs font-medium border border-[#D6C9B8] bg-[#FFFDF9] hover:border-[#C45512] text-[#3B2314] rounded-xl cursor-pointer"
                     >
                       Owner Login
                     </button>
@@ -2187,14 +1805,14 @@ export default function App() {
             {/* Wishlist / Favourites */}
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h2 className="font-display text-2xl font-semibold text-[#1C1917] flex items-center gap-2">
-                  <Heart className="w-5 h-5 text-[#9A3412] fill-[#9A3412]" />
+                <h2 className="font-display text-2xl font-semibold text-[#3B2314] flex items-center gap-2">
+                  <Heart className="w-5 h-5 text-[#C45512] fill-[#C45512]" />
                   <span>Wishlist &amp; Favourites ({wishlistedProducts.length})</span>
                 </h2>
               </div>
 
               {wishlistedProducts.length === 0 ? (
-                <div className="p-6 bg-white border border-[#E4DFD5] rounded-2xl text-sm text-[#57534E]">
+                <div className="p-6 bg-[#FFFDF9] border border-[#E6DDD1] rounded-2xl text-sm text-[#6D4C3D]">
                   Tap the heart icon on any cake, sweet box, or savoury pack to save it here for quick ordering.
                 </div>
               ) : (
@@ -2205,7 +1823,7 @@ export default function App() {
             {/* Saved Delivery Addresses */}
             <div className="space-y-4">
               <div className="flex items-center justify-between gap-3">
-                <h2 className="font-display text-2xl font-semibold text-[#1C1917]">
+                <h2 className="font-display text-2xl font-semibold text-[#3B2314]">
                   Saved Delivery Addresses
                 </h2>
                 <button
@@ -2217,9 +1835,9 @@ export default function App() {
                       setShowNewAddressForm((prev) => !prev);
                     }
                   }}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium bg-white border border-[#D6D0C4] hover:border-[#9A3412] rounded-xl text-[#1C1917] cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium bg-[#FFFDF9] border border-[#D6C9B8] hover:border-[#C45512] rounded-xl text-[#3B2314] cursor-pointer"
                 >
-                  <BookmarkPlus className="w-3.5 h-3.5 text-[#9A3412]" />
+                  <BookmarkPlus className="w-3.5 h-3.5 text-[#C45512]" />
                   <span>{showNewAddressForm ? 'Cancel' : 'Add Address'}</span>
                 </button>
               </div>
@@ -2227,7 +1845,7 @@ export default function App() {
               {showNewAddressForm && user && (
                 <form
                   onSubmit={(e) => void handleAddAddressSubmit(e)}
-                  className="p-5 bg-white border border-[#E4DFD5] rounded-2xl space-y-3"
+                  className="p-5 bg-[#FFFDF9] border border-[#E6DDD1] rounded-2xl space-y-3"
                 >
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <input
@@ -2235,21 +1853,21 @@ export default function App() {
                       value={newAddrLabel}
                       onChange={(e) => setNewAddrLabel(e.target.value)}
                       placeholder="Label (Home, Office)"
-                      className="px-3 py-2 text-xs bg-[#FAFAF7] border border-[#D6D0C4] rounded-xl"
+                      className="px-3 py-2 text-xs bg-[#FAF5EE] border border-[#D6C9B8] rounded-xl"
                     />
                     <input
                       type="text"
                       value={newAddrName}
                       onChange={(e) => setNewAddrName(e.target.value)}
                       placeholder="Recipient Name"
-                      className="px-3 py-2 text-xs bg-[#FAFAF7] border border-[#D6D0C4] rounded-xl"
+                      className="px-3 py-2 text-xs bg-[#FAF5EE] border border-[#D6C9B8] rounded-xl"
                     />
                     <input
                       type="tel"
                       value={newAddrPhone}
                       onChange={(e) => setNewAddrPhone(e.target.value)}
                       placeholder="Phone number"
-                      className="px-3 py-2 text-xs font-mono-tabular bg-[#FAFAF7] border border-[#D6D0C4] rounded-xl"
+                      className="px-3 py-2 text-xs font-mono-tabular bg-[#FAF5EE] border border-[#D6C9B8] rounded-xl"
                     />
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2259,7 +1877,7 @@ export default function App() {
                       value={newAddrStreet}
                       onChange={(e) => setNewAddrStreet(e.target.value)}
                       placeholder="Street Address / Colony"
-                      className="sm:col-span-2 px-3 py-2 text-xs bg-[#FAFAF7] border border-[#D6D0C4] rounded-xl"
+                      className="sm:col-span-2 px-3 py-2 text-xs bg-[#FAF5EE] border border-[#D6C9B8] rounded-xl"
                     />
                     <input
                       type="text"
@@ -2267,13 +1885,13 @@ export default function App() {
                       value={newAddrPin}
                       onChange={(e) => setNewAddrPin(e.target.value)}
                       placeholder="Pin Code (522503)"
-                      className="px-3 py-2 text-xs font-mono-tabular bg-[#FAFAF7] border border-[#D6D0C4] rounded-xl"
+                      className="px-3 py-2 text-xs font-mono-tabular bg-[#FAF5EE] border border-[#D6C9B8] rounded-xl"
                     />
                   </div>
                   <div className="flex justify-end">
                     <button
                       type="submit"
-                      className="px-4 py-2 text-xs font-medium bg-[#9A3412] hover:bg-[#7C2D12] text-white rounded-xl cursor-pointer"
+                      className="px-4 py-2 text-xs font-medium bg-[#C45512] hover:bg-[#A9450C] text-white rounded-xl cursor-pointer"
                     >
                       Save Address
                     </button>
@@ -2282,10 +1900,10 @@ export default function App() {
               )}
 
               {(customerProfile?.savedAddresses?.length ?? 0) === 0 ? (
-                <div className="p-6 bg-white border border-[#E4DFD5] rounded-2xl text-sm text-[#57534E]">
+                <div className="p-6 bg-[#FFFDF9] border border-[#E6DDD1] rounded-2xl text-sm text-[#6D4C3D]">
                   {customerProfile?.streetAddress ? (
                     <div>
-                      <p className="font-semibold text-[#1C1917]">Primary Checkout Address</p>
+                      <p className="font-semibold text-[#3B2314]">Primary Checkout Address</p>
                       <p className="text-xs mt-1">
                         {customerProfile.fullName} · {customerProfile.streetAddress} ({customerProfile.postalCode})
                       </p>
@@ -2299,14 +1917,14 @@ export default function App() {
                   {customerProfile?.savedAddresses?.map((addr) => (
                     <div
                       key={addr.id}
-                      className="p-4 bg-white border border-[#E4DFD5] rounded-2xl flex items-start justify-between gap-3"
+                      className="p-4 bg-[#FFFDF9] border border-[#E6DDD1] rounded-2xl flex items-start justify-between gap-3"
                     >
                       <div className="text-xs space-y-1">
-                        <p className="font-semibold text-sm text-[#1C1917]">{addr.label}</p>
-                        <p className="text-[#57534E]">
+                        <p className="font-semibold text-sm text-[#3B2314]">{addr.label}</p>
+                        <p className="text-[#6D4C3D]">
                           {addr.fullName} · <span className="font-mono-tabular">{addr.phone}</span>
                         </p>
-                        <p className="text-[#1C1917]">
+                        <p className="text-[#3B2314]">
                           {addr.streetAddress}
                           {addr.apartment ? `, ${addr.apartment}` : ''} —{' '}
                           <span className="font-mono-tabular">{addr.postalCode}</span>
@@ -2316,7 +1934,7 @@ export default function App() {
                         type="button"
                         onClick={() => void handleDeleteAddress(addr.id)}
                         aria-label={`Delete ${addr.label}`}
-                        className="p-1.5 text-[#57534E] hover:text-[#991B1B] cursor-pointer"
+                        className="p-1.5 text-[#8D7262] hover:text-[#B91C1C] cursor-pointer"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -2329,20 +1947,20 @@ export default function App() {
             {/* Order History & Quick Reorder */}
             {user && orders.length > 0 && (
               <div className="space-y-4">
-                <h2 className="font-display text-2xl font-semibold text-[#1C1917]">
+                <h2 className="font-display text-2xl font-semibold text-[#3B2314]">
                   Recent Order History
                 </h2>
                 <div className="space-y-3">
                   {orders.slice(0, 5).map((ord) => (
                     <div
                       key={ord.id}
-                      className="p-4 bg-white border border-[#E4DFD5] rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                      className="p-4 bg-[#FFFDF9] border border-[#E6DDD1] rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                     >
                       <div className="text-xs space-y-0.5">
-                        <p className="font-mono-tabular font-semibold text-sm text-[#1C1917]">
+                        <p className="font-mono-tabular font-semibold text-sm text-[#3B2314]">
                           #{ord.id} · {formatMoney(ord.total, settings.currency)}
                         </p>
-                        <p className="text-[#57534E]">
+                        <p className="text-[#6D4C3D]">
                           {ord.items.map((i) => `${i.quantity}× ${i.name}`).join(', ')}
                         </p>
                       </div>
@@ -2353,14 +1971,14 @@ export default function App() {
                             setActiveOrderId(ord.id);
                             handleTabSwitch('orders');
                           }}
-                          className="px-3 py-1.5 text-xs font-medium bg-[#FAFAF7] border border-[#D6D0C4] rounded-xl text-[#1C1917] cursor-pointer"
+                          className="px-3 py-1.5 text-xs font-medium bg-[#FAF5EE] border border-[#D6C9B8] rounded-xl text-[#3B2314] cursor-pointer"
                         >
                           Track
                         </button>
                         <button
                           type="button"
                           onClick={() => handleReorder(ord)}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-[#9A3412] hover:bg-[#7C2D12] text-white rounded-xl cursor-pointer"
+                          className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-[#C45512] hover:bg-[#A9450C] text-white rounded-xl cursor-pointer"
                         >
                           <RotateCcw className="w-3.5 h-3.5" />
                           <span>Reorder</span>
@@ -2373,12 +1991,12 @@ export default function App() {
             )}
 
             {/* Install App & Contact Card */}
-            <div className="p-5 bg-white border border-[#E4DFD5] rounded-2xl flex flex-wrap items-center justify-between gap-4">
+            <div className="p-5 bg-[#FFFDF9] border border-[#E6DDD1] rounded-2xl flex flex-wrap items-center justify-between gap-4">
               <div>
-                <p className="font-display text-lg font-semibold text-[#1C1917]">
+                <p className="font-display text-lg font-semibold text-[#3B2314]">
                   {settings.bakeryName}
                 </p>
-                <p className="text-xs text-[#57534E] mt-0.5">
+                <p className="text-xs text-[#6D4C3D] mt-0.5">
                   {settings.address} · Call {settings.phone}
                 </p>
               </div>
@@ -2388,141 +2006,89 @@ export default function App() {
         )}
       </main>
 
-      {/* SECTION 4: 4-Column Multinational Enterprise Footer */}
-      <footer className="hidden md:block border-t border-[#E4DFD5] bg-white">
-        <div className="max-w-[1200px] mx-auto px-6 py-10 grid grid-cols-1 md:grid-cols-4 gap-8 text-xs text-[#57534E]">
-          {/* Col 1: Flagship Storefront */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-3">
-              <img
-                src={BAKERY_LOGO_URL}
-                alt="IBC Indian Bakery & Cafe"
-                className="w-10 h-10 rounded-full object-cover border border-[#E4DFD5] shrink-0"
-              />
-              <div>
-                <p className="font-display text-base font-semibold text-[#1C1917]">
-                  {settings.bakeryName}
-                </p>
-                <p className="text-[11px] text-[#9A3412] font-medium">
-                  Widdi Centre Flagship Kitchen
-                </p>
-              </div>
+      {/* Clean Desktop Footer */}
+      <footer className="hidden md:block border-t border-[#E6DDD1] bg-[#FFFDF9]">
+        <div className="max-w-[1200px] mx-auto px-6 py-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 text-sm text-[#6D4C3D]">
+          <div className="flex items-center gap-3.5">
+            <img
+              src={BAKERY_LOGO_URL}
+              alt="IBC Indian Bakery & Cafe"
+              className="w-11 h-11 rounded-full object-cover border border-[#E6DDD1]"
+            />
+            <div>
+              <p className="font-display text-base font-semibold text-[#3B2314]">
+                {settings.bakeryName}
+              </p>
+              <p className="mt-0.5 text-xs">{settings.address}</p>
+              <p className="mt-0.5 text-xs font-mono-tabular">
+                Call:{' '}
+                <a
+                  href={`tel:${settings.phone}`}
+                  className="hover:text-[#3B2314] underline underline-offset-2"
+                >
+                  {settings.phone}
+                </a>
+                {settings.secondaryPhone && (
+                  <>
+                    {' / '}
+                    <a
+                      href={`tel:${settings.secondaryPhone}`}
+                      className="hover:text-[#3B2314] underline underline-offset-2"
+                    >
+                      {settings.secondaryPhone}
+                    </a>
+                  </>
+                )}
+              </p>
             </div>
-            <p className="leading-relaxed">{settings.address}</p>
-            <p className="font-mono-tabular text-[#1C1917]">
-              Call:{' '}
-              <a href={`tel:${settings.phone}`} className="hover:text-[#9A3412] underline underline-offset-2">
-                {settings.phone}
-              </a>
-              {settings.secondaryPhone && (
-                <>
-                  {' / '}
-                  <a
-                    href={`tel:${settings.secondaryPhone}`}
-                    className="hover:text-[#9A3412] underline underline-offset-2"
-                  >
-                    {settings.secondaryPhone}
-                  </a>
-                </>
-              )}
-            </p>
           </div>
 
-          {/* Col 2: Navigation */}
-          <div className="space-y-2.5">
-            <p className="font-semibold text-[#1C1917]">Storefront</p>
-            <ul className="space-y-2">
-              <li>
-                <button
-                  type="button"
-                  onClick={() => handleTabSwitch('home')}
-                  className="hover:text-[#1C1917] transition-colors cursor-pointer"
-                >
-                  Home &amp; Curated Menu
-                </button>
-              </li>
-              <li>
-                <button
-                  type="button"
-                  onClick={() => handleTabSwitch('categories')}
-                  className="hover:text-[#1C1917] transition-colors cursor-pointer"
-                >
-                  8 Bakery Departments
-                </button>
-              </li>
-              <li>
-                <button
-                  type="button"
-                  onClick={() => handleTabSwitch('search')}
-                  className="hover:text-[#1C1917] transition-colors cursor-pointer"
-                >
-                  Search &amp; Dietary Filter
-                </button>
-              </li>
-              <li>
-                <button
-                  type="button"
-                  onClick={() => handleTabSwitch('orders')}
-                  className="hover:text-[#1C1917] transition-colors cursor-pointer"
-                >
-                  Track Active Orders
-                </button>
-              </li>
-            </ul>
-          </div>
-
-          {/* Col 3: Delivery Coverage */}
-          <div className="space-y-2.5">
-            <p className="font-semibold text-[#1C1917]">Dispatch Pin Codes</p>
-            <ul className="space-y-2 font-mono-tabular">
-              {settings.deliveryZones.slice(0, 4).map((zone) => (
-                <li key={zone.postalPrefix} className="flex items-center justify-between gap-2">
-                  <span className="truncate text-[#1C1917]">
-                    {zone.postalPrefix} · {zone.neighborhood}
-                  </span>
-                  <span className="text-[#57534E] shrink-0">{zone.etaMinutes}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {/* Col 4: Hospitality, App & Owner Portal */}
-          <div className="space-y-2.5">
-            <p className="font-semibold text-[#1C1917]">Operations &amp; Portals</p>
-            <p>Kitchen Hours: 06:30 – 22:00 Daily</p>
-            <div className="flex flex-col items-start gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => setIsCorporateQuoteOpen(true)}
-                className="font-medium text-[#1B4332] hover:underline underline-offset-4 cursor-pointer"
-              >
-                Corporate &amp; Bulk Catering Desk
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthInitialMode('customer');
+          <div className="flex flex-wrap items-center gap-5 text-xs font-medium">
+            <button
+              type="button"
+              onClick={() => handleTabSwitch('home')}
+              className="hover:text-[#3B2314] transition-colors cursor-pointer whitespace-nowrap"
+            >
+              Home
+            </button>
+            <button
+              type="button"
+              onClick={() => handleTabSwitch('categories')}
+              className="hover:text-[#3B2314] transition-colors cursor-pointer whitespace-nowrap"
+            >
+              Categories
+            </button>
+            <button
+              type="button"
+              onClick={() => handleTabSwitch('orders')}
+              className="hover:text-[#3B2314] transition-colors cursor-pointer whitespace-nowrap"
+            >
+              Track Orders
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAuthInitialMode('customer');
+                setIsAuthModalOpen(true);
+              }}
+              className="hover:text-[#3B2314] transition-colors cursor-pointer whitespace-nowrap"
+            >
+              Customer Login
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (isOwner) {
+                  setIsOwnerStudioOpen(true);
+                } else {
+                  setAuthInitialMode('owner');
                   setIsAuthModalOpen(true);
-                }}
-                className="hover:text-[#1C1917] cursor-pointer"
-              >
-                Customer Sign In
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (isOwner) {
-                    setIsOwnerStudioOpen(true);
-                  } else {
-                    setAuthInitialMode('owner');
-                    setIsAuthModalOpen(true);
-                  }
-                }}
-                className="font-semibold text-[#9A3412] hover:underline underline-offset-4 cursor-pointer"
-              >
-                {isOwner ? 'Open Owner Studio' : 'Bakery Owner Portal'}
-              </button>
-            </div>
+                }
+              }}
+              className="text-[#C45512] hover:underline underline-offset-4 transition-colors cursor-pointer whitespace-nowrap"
+            >
+              Owner Login
+            </button>
           </div>
         </div>
       </footer>
@@ -2534,13 +2100,13 @@ export default function App() {
         activeOrdersCount={activeOrdersCount}
       />
 
-      {/* Mobile & Desktop Quick Cart / Live Order Floating Bar */}
-      {bagCount > 0 && !isBagOpen && !activeProduct && !isOwnerStudioOpen && !isCorporateQuoteOpen ? (
-        <div className="fixed bottom-[64px] md:bottom-5 left-4 right-4 md:left-auto md:right-6 md:w-80 z-30">
+      {/* Mobile Sticky Cart Summary Bar */}
+      {bagCount > 0 && !isBagOpen && !activeProduct && !isOwnerStudioOpen && (
+        <div className="fixed bottom-[68px] md:bottom-5 left-4 right-4 md:left-auto md:right-6 md:w-80 z-30">
           <button
             type="button"
             onClick={() => setIsBagOpen(true)}
-            className="w-full min-h-[44px] px-4 py-2 bg-[#1C1917] hover:bg-[#33302D] text-white rounded-xl shadow-lg flex items-center justify-between gap-3 cursor-pointer transition-colors"
+            className="w-full min-h-[48px] px-4 py-2.5 bg-[#3B2314] hover:bg-[#52321E] text-white rounded-xl shadow-lg flex items-center justify-between gap-3 cursor-pointer transition-colors"
           >
             <div className="flex items-center gap-2.5 text-left min-w-0">
               <ShoppingBag className="w-4 h-4 text-[#FDBA74] shrink-0" />
@@ -2553,51 +2119,19 @@ export default function App() {
                 </p>
               </div>
             </div>
-            <span className="inline-flex items-center gap-1 text-xs font-semibold bg-[#9A3412] px-3 py-1.5 rounded-lg shrink-0">
+            <span className="inline-flex items-center gap-1 text-xs font-semibold bg-[#C45512] px-3 py-1.5 rounded-lg shrink-0">
               <span>View Cart</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </span>
           </button>
         </div>
-      ) : activeLiveOrder &&
-        activeTab !== 'orders' &&
-        !isBagOpen &&
-        !activeProduct &&
-        !isOwnerStudioOpen &&
-        !isTrackerOpen ? (
-        <div className="fixed bottom-[64px] md:bottom-5 left-4 right-4 md:left-auto md:right-6 md:w-84 z-30">
-          <button
-            type="button"
-            onClick={() => {
-              setActiveOrderId(activeLiveOrder.id);
-              setIsTrackerOpen(true);
-            }}
-            className="w-full min-h-[44px] px-4 py-2 bg-[#1B4332] hover:bg-[#143326] text-white rounded-xl shadow-lg flex items-center justify-between gap-3 cursor-pointer transition-colors"
-          >
-            <div className="flex items-center gap-2.5 text-left min-w-0">
-              <Flame className="w-4 h-4 text-[#FDBA74] shrink-0" />
-              <div className="min-w-0">
-                <p className="text-xs font-semibold truncate">
-                  Order #{activeLiveOrder.id} · Active
-                </p>
-                <p className="text-[11px] text-white/80 truncate">
-                  {activeLiveOrder.deliveryDay}, {activeLiveOrder.deliveryWindow}
-                </p>
-              </div>
-            </div>
-            <span className="inline-flex items-center gap-1 text-xs font-semibold bg-white/15 px-2.5 py-1 rounded-lg shrink-0">
-              <span>Track Live</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </span>
-          </button>
-        </div>
-      ) : null}
+      )}
 
       {/* Action Feedback Toast */}
       {toastInfo && (
         <div
           role="status"
-          className="fixed top-16 right-4 z-50 max-w-xs bg-[#1C1917] text-white border border-[#44403C] rounded-xl px-4 py-2.5 shadow-xl flex items-center gap-3 text-xs"
+          className="fixed top-16 right-4 z-50 max-w-xs bg-[#3B2314] text-white border border-[#5C3A24] rounded-xl px-4 py-2.5 shadow-xl flex items-center gap-3 text-xs"
         >
           <span className="flex-1 leading-snug">{toastInfo.message}</span>
           {toastInfo.showCartAction && (
@@ -2619,7 +2153,7 @@ export default function App() {
       {!isOnline && (
         <div
           role="status"
-          className="fixed bottom-16 md:bottom-4 left-4 z-50 flex items-center gap-2 rounded-xl bg-[#1C1917] px-3.5 py-2 text-xs font-medium text-white shadow-lg"
+          className="fixed bottom-16 md:bottom-4 left-4 z-50 flex items-center gap-2 rounded-xl bg-[#3B2314] px-3.5 py-2 text-xs font-medium text-white shadow-lg"
         >
           <WifiOff className="w-3.5 h-3.5 text-[#FDBA74]" />
           <span>Offline Mode — Cached menu displayed</span>
@@ -2631,6 +2165,7 @@ export default function App() {
         product={activeProduct}
         currency={settings.currency}
         user={user}
+        isOwner={isOwner}
         isWishlisted={activeProduct ? wishlistIds.includes(activeProduct.id) : false}
         reviews={activeProduct ? reviewsByProduct[activeProduct.id] ?? [] : []}
         onClose={() => setActiveProductId(null)}
@@ -2640,6 +2175,8 @@ export default function App() {
           setIsAuthModalOpen(true);
         }}
         onSubmitReview={handleSubmitReview}
+        onReplyReview={handleReplyReview}
+        onDeleteReview={handleDeleteReview}
         onAddToCart={handleAddToCart}
       />
 
@@ -2649,8 +2186,6 @@ export default function App() {
         user={user}
         customerProfile={customerProfile}
         items={cart}
-        products={products}
-        unavailableProductIds={unavailableProductIds}
         settings={settings}
         appliedPromoCode={appliedPromoCode}
         onApplyPromoCode={setAppliedPromoCode}
@@ -2662,79 +2197,64 @@ export default function App() {
         onPostalCodeChange={setPostalCode}
         onUpdateQuantity={handleUpdateQuantity}
         onRemoveItem={handleRemoveItem}
-        onQuickAddProduct={handleQuickAdd}
-        onRemoveUnavailableItems={handleRemoveUnavailableItems}
         onRequestSignIn={() => setIsAuthModalOpen(true)}
         onSaveAddress={handleSaveAddress}
         onPlaceOrder={handlePlaceOrder}
       />
 
-      <Suspense fallback={null}>
-        {isTrackerOpen && (
-          <OrderTrackerModal
-            isOpen={isTrackerOpen}
-            onClose={() => setIsTrackerOpen(false)}
-            user={user}
-            isOwner={isOwner}
-            currency={settings.currency}
-            orders={orders}
-            activeOrderId={activeOrderId}
-            onSelectOrder={setActiveOrderId}
-            onAdvanceStage={handleAdvanceOrderStage}
-            onReorder={handleReorder}
-            onRequestSignIn={() => setIsAuthModalOpen(true)}
-          />
-        )}
+      <OrderTrackerModal
+        isOpen={isTrackerOpen}
+        onClose={() => setIsTrackerOpen(false)}
+        user={user}
+        isOwner={isOwner}
+        currency={settings.currency}
+        orders={orders}
+        activeOrderId={activeOrderId}
+        onSelectOrder={setActiveOrderId}
+        onAdvanceStage={handleAdvanceOrderStage}
+        onReorder={handleReorder}
+        onRequestSignIn={() => setIsAuthModalOpen(true)}
+      />
 
-        {isAuthModalOpen && (
-          <AuthModal
-            isOpen={isAuthModalOpen}
-            onClose={() => setIsAuthModalOpen(false)}
-            user={user}
-            isOwner={isOwner}
-            initialMode={authInitialMode}
-            onOpenOwnerStudio={() => setIsOwnerStudioOpen(true)}
-            onOpenOrders={() => {
-              setIsAuthModalOpen(false);
-              handleTabSwitch('orders');
-            }}
-          />
-        )}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        user={user}
+        isOwner={isOwner}
+        initialMode={authInitialMode}
+        onOpenOwnerStudio={() => setIsOwnerStudioOpen(true)}
+        onOpenOrders={() => {
+          setIsAuthModalOpen(false);
+          handleTabSwitch('orders');
+        }}
+      />
 
-        {isCorporateQuoteOpen && (
-          <CorporateQuoteModal
-            isOpen={isCorporateQuoteOpen}
-            onClose={() => setIsCorporateQuoteOpen(false)}
-            settings={settings}
-          />
-        )}
-
-        {isOwnerStudioOpen && (
-          <OwnerStudioModal
-            isOpen={isOwnerStudioOpen}
-            onClose={() => setIsOwnerStudioOpen(false)}
-            isOwner={isOwner}
-            onRequestOwnerSignIn={() => {
-              setAuthInitialMode('owner');
-              setIsAuthModalOpen(true);
-            }}
-            products={products}
-            onSaveProduct={handleSaveProduct}
-            onDeleteProduct={handleDeleteProduct}
-            onToggleStock={handleToggleStock}
-            onResetDefaults={handleResetDefaults}
-            settings={settings}
-            onUpdateSettings={handleUpdateSettings}
-            orders={orders}
-            onAdvanceOrderStage={handleAdvanceOrderStage}
-            onUpdatePaymentStatus={handleUpdatePaymentStatus}
-            owners={ownersList}
-            currentUserEmail={resolvedUserEmail}
-            onAddOwner={handleAddOwner}
-            onRemoveOwner={handleRemoveOwner}
-          />
-        )}
-      </Suspense>
+      <OwnerStudioModal
+        isOpen={isOwnerStudioOpen}
+        onClose={() => setIsOwnerStudioOpen(false)}
+        isOwner={isOwner}
+        onRequestOwnerSignIn={() => {
+          setAuthInitialMode('owner');
+          setIsAuthModalOpen(true);
+        }}
+        products={products}
+        onSaveProduct={handleSaveProduct}
+        onDeleteProduct={handleDeleteProduct}
+        onToggleStock={handleToggleStock}
+        onResetDefaults={handleResetDefaults}
+        settings={settings}
+        onUpdateSettings={handleUpdateSettings}
+        orders={orders}
+        onAdvanceOrderStage={handleAdvanceOrderStage}
+        onUpdatePaymentStatus={handleUpdatePaymentStatus}
+        reviews={reviews}
+        onReplyReview={handleReplyReview}
+        onDeleteReview={handleDeleteReview}
+        owners={ownersList}
+        currentUserEmail={resolvedUserEmail}
+        onAddOwner={handleAddOwner}
+        onRemoveOwner={handleRemoveOwner}
+      />
     </div>
   );
 }

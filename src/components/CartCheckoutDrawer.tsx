@@ -2,7 +2,6 @@ import { FormEvent, useEffect, useState } from 'react';
 import { User } from 'firebase/auth';
 import { QRCodeSVG } from 'qrcode.react';
 import {
-  AlertTriangle,
   ArrowLeft,
   BookmarkCheck,
   Check,
@@ -13,18 +12,17 @@ import {
   Minus,
   Plus,
   ShoppingBag,
-  Sparkles,
   Tag,
   Trash2,
   X,
 } from 'lucide-react';
 import { DEFAULT_BAKERY_SETTINGS, formatMoney, resolveDeliveryZone } from '../data/bakeryData';
 import {
-  calculateCartSummary,
-  computeCartSavings,
-  getSmartCartUpsells,
-  sanitizeText,
-} from '../utils/bakeryLogic';
+  buildUpiPaymentUri,
+  formatFriendlyFirestoreError,
+  sanitizeUtrInput,
+  validateUpiReference,
+} from '../lib/upi';
 import {
   BakerySettings,
   CartItem,
@@ -32,7 +30,6 @@ import {
   Order,
   OrderCustomerDetails,
   PaymentMethod,
-  Product,
   SavedAddress,
 } from '../types/bakery';
 import { ResilientImage } from './ResilientImage';
@@ -43,8 +40,6 @@ interface CartCheckoutDrawerProps {
   user: User | null;
   customerProfile: CustomerProfile | null;
   items: CartItem[];
-  products?: Product[];
-  unavailableProductIds?: Set<string>;
   settings: BakerySettings;
   appliedPromoCode: string;
   onApplyPromoCode: (code: string) => void;
@@ -56,8 +51,6 @@ interface CartCheckoutDrawerProps {
   onPostalCodeChange: (zip: string) => void;
   onUpdateQuantity: (cartItemId: string, delta: number) => void;
   onRemoveItem: (cartItemId: string) => void;
-  onQuickAddProduct?: (product: Product) => void;
-  onRemoveUnavailableItems?: () => void;
   onRequestSignIn: () => void;
   onSaveAddress: (address: Omit<SavedAddress, 'id'>) => Promise<void>;
   onPlaceOrder: (order: Omit<Order, 'customerId' | 'customerEmail'>) => Promise<void>;
@@ -69,8 +62,6 @@ export function CartCheckoutDrawer({
   user,
   customerProfile,
   items,
-  products = [],
-  unavailableProductIds,
   settings,
   appliedPromoCode,
   onApplyPromoCode,
@@ -82,8 +73,6 @@ export function CartCheckoutDrawer({
   onPostalCodeChange,
   onUpdateQuantity,
   onRemoveItem,
-  onQuickAddProduct,
-  onRemoveUnavailableItems,
   onRequestSignIn,
   onSaveAddress,
   onPlaceOrder,
@@ -92,6 +81,7 @@ export function CartCheckoutDrawer({
   const [tip, setTip] = useState<number>(0);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('upi_prepaid');
   const [upiReference, setUpiReference] = useState<string>('');
+  const [upiPaymentConfirmed, setUpiPaymentConfirmed] = useState<boolean>(false);
   const [cardPreference, setCardPreference] = useState<string>('Visa / Mastercard / RuPay');
   const [copiedUpi, setCopiedUpi] = useState<boolean>(false);
   const [saveAddressChecked, setSaveAddressChecked] = useState<boolean>(false);
@@ -159,6 +149,7 @@ export function CartCheckoutDrawer({
       setPromoFeedback('');
       setSubmitting(false);
       setUpiReference('');
+      setUpiPaymentConfirmed(false);
       setCopiedUpi(false);
     } else {
       setDraftOrderId(`IBC-${Date.now().toString().slice(-4)}${Math.floor(10 + Math.random() * 89)}`);
@@ -176,41 +167,38 @@ export function CartCheckoutDrawer({
 
   if (!isOpen) return null;
 
-  const zone = resolveDeliveryZone(customer.postalCode || postalCode, settings);
-  const pricing = calculateCartSummary({
-    items,
-    settings,
-    appliedPromoCode,
-    zoneFee: zone.fee,
-    tip,
-  });
-  const {
-    subtotal,
-    discount,
-    taxAmount,
-    qualifiesFreeDelivery,
-    deliveryFee,
-    remainingForFree,
-    progressPct,
-    bagTotal,
-    total,
-  } = pricing;
+  const subtotal = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+  const activeOffer = settings.promoCodes.find(
+    (offer) =>
+      offer.active &&
+      offer.code.toUpperCase() === appliedPromoCode.trim().toUpperCase() &&
+      subtotal >= offer.minOrder
+  );
+
+  const discount = activeOffer
+    ? activeOffer.discountType === 'percent'
+      ? Math.round((subtotal * activeOffer.value) / 100)
+      : Math.min(subtotal, activeOffer.value)
+    : 0;
+
+  const discountedSubtotal = Math.max(0, subtotal - discount);
   const taxPercent = settings.taxPercent ?? 5;
-  const activeOffer = pricing.appliedOfferCode
-    ? settings.promoCodes.find((o) => o.code === pricing.appliedOfferCode)
-    : undefined;
+  const taxAmount =
+    items.length === 0 ? 0 : Math.round((discountedSubtotal * taxPercent) / 100);
+  const zone = resolveDeliveryZone(customer.postalCode || postalCode, settings);
+  const qualifiesFreeDelivery = discountedSubtotal >= settings.freeDeliveryThreshold;
+  const deliveryFee = items.length === 0 ? 0 : qualifiesFreeDelivery ? 0 : zone.fee;
+  const remainingForFree = Math.max(0, settings.freeDeliveryThreshold - discountedSubtotal);
+  const progressPct =
+    settings.freeDeliveryThreshold > 0
+      ? Math.min(100, Math.round((discountedSubtotal / settings.freeDeliveryThreshold) * 100))
+      : 100;
+  const bagTotal = discountedSubtotal + taxAmount + deliveryFee;
+  const total = bagTotal + (items.length > 0 ? tip : 0);
   const activeSlot =
     settings.deliverySlots.find((s) => s.id === selectedSlotId) ??
     settings.deliverySlots[0] ??
     DEFAULT_BAKERY_SETTINGS.deliverySlots[0];
-
-  const unavailableItems = unavailableProductIds
-    ? items.filter((item) => unavailableProductIds.has(item.productId))
-    : [];
-  const hasUnavailableItems = unavailableItems.length > 0;
-  const upsellProducts =
-    products.length > 0 && onQuickAddProduct ? getSmartCartUpsells(items, products, 3) : [];
-  const savings = computeCartSavings(items, products, discount);
 
   const tipPresets =
     settings.currency === '₹' ? [0, 20, 40, 60] : [0, 2, 4, 6];
@@ -255,11 +243,17 @@ export function CartCheckoutDrawer({
   };
 
   const merchantUpiId = (settings.upiId ?? '').trim();
-  const upiUri = merchantUpiId
-    ? `upi://pay?pa=${encodeURIComponent(merchantUpiId)}&pn=${encodeURIComponent(
-        settings.bakeryName
-      )}&am=${total.toFixed(2)}&cu=INR&tn=${encodeURIComponent(`Order ${draftOrderId}`)}`
-    : '';
+  const requiresUpiPayment = paymentMethod === 'upi_prepaid' && total > 0;
+  const utrCheck = validateUpiReference(upiReference);
+  const upiUri =
+    merchantUpiId && total > 0
+      ? buildUpiPaymentUri({
+          upiId: merchantUpiId,
+          merchantName: settings.bakeryName,
+          amount: total,
+          orderId: draftOrderId,
+        })
+      : '';
 
   const handleCopyUpi = async () => {
     if (!merchantUpiId) return;
@@ -278,25 +272,11 @@ export function CartCheckoutDrawer({
       onRequestSignIn();
       return;
     }
-    if (hasUnavailableItems) {
-      setFormError('Some items in your bag are sold out. Please remove them before placing your order.');
-      setStep('bag');
-      return;
-    }
-
-    const cleanFullName = sanitizeText(customer.fullName, 80);
-    const cleanPhone = sanitizeText(customer.phone, 24);
-    const cleanStreet = sanitizeText(customer.streetAddress, 160);
-    const cleanApt = sanitizeText(customer.apartment, 60);
-    const cleanPin = sanitizeText(customer.postalCode, 16);
-    const cleanInstructions = sanitizeText(customer.instructions, 200);
-    const cleanUpiRef = sanitizeText(upiReference, 40);
-
     if (
-      cleanFullName.length < 1 ||
-      cleanPhone.length < 5 ||
-      cleanStreet.length < 3 ||
-      cleanPin.length < 3
+      customer.fullName.trim().length < 1 ||
+      customer.phone.trim().length < 5 ||
+      customer.streetAddress.trim().length < 3 ||
+      customer.postalCode.trim().length < 3
     ) {
       setFormError(
         'Please enter your full name, valid phone number (5+ digits), full street address, and pin code.'
@@ -304,19 +284,28 @@ export function CartCheckoutDrawer({
       return;
     }
 
-    if (paymentMethod === 'upi_prepaid') {
+    let verifiedUtr: string | undefined;
+    if (requiresUpiPayment) {
       if (!merchantUpiId) {
         setFormError(
           'Online UPI ID is not configured yet. Please select Cash on Delivery, Credit/Debit Card, or UPI on Delivery.'
         );
         return;
       }
-      if (cleanUpiRef.length < 4) {
+      if (!utrCheck.valid) {
         setFormError(
-          'After paying via UPI, please enter your 12-digit UPI Reference / UTR number so we can verify payment.'
+          utrCheck.reason ??
+            'Please enter your valid 12-digit UPI UTR / Reference number from your payment receipt.'
         );
         return;
       }
+      if (!upiPaymentConfirmed) {
+        setFormError(
+          'Please tick the confirmation box confirming you have completed the UPI payment.'
+        );
+        return;
+      }
+      verifiedUtr = utrCheck.cleaned;
     }
 
     setSubmitting(true);
@@ -324,25 +313,22 @@ export function CartCheckoutDrawer({
     try {
       if (saveAddressChecked && user) {
         await onSaveAddress({
-          label: sanitizeText(addressLabel, 30) || 'Home',
-          fullName: cleanFullName,
-          phone: cleanPhone,
-          streetAddress: cleanStreet,
-          apartment: cleanApt,
-          postalCode: cleanPin,
-          instructions: cleanInstructions,
+          label: addressLabel.trim() || 'Home',
+          fullName: customer.fullName.trim(),
+          phone: customer.phone.trim(),
+          streetAddress: customer.streetAddress.trim(),
+          apartment: customer.apartment.trim(),
+          postalCode: customer.postalCode.trim(),
+          instructions: customer.instructions.trim(),
         });
       }
 
-      const combinedNote = sanitizeText(
-        [
-          orderNote.trim(),
-          paymentMethod === 'online_card' ? `Card Payment Request (${cardPreference})` : '',
-        ]
-          .filter(Boolean)
-          .join(' · '),
-        240
-      );
+      const combinedNote = [
+        orderNote.trim(),
+        paymentMethod === 'online_card' ? `Card Payment Request (${cardPreference})` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
 
       const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       await onPlaceOrder({
@@ -350,18 +336,18 @@ export function CartCheckoutDrawer({
         createdAtLabel: nowTime,
         deliveryDay,
         deliveryWindow: activeSlot.window,
-        neighborhood: sanitizeText(zone.neighborhood, 100),
+        neighborhood: zone.neighborhood,
         customer: {
-          fullName: cleanFullName,
-          phone: cleanPhone,
-          streetAddress: cleanStreet,
-          apartment: cleanApt,
-          postalCode: cleanPin,
-          instructions: cleanInstructions,
+          fullName: customer.fullName.trim(),
+          phone: customer.phone.trim(),
+          streetAddress: customer.streetAddress.trim(),
+          apartment: customer.apartment.trim(),
+          postalCode: customer.postalCode.trim(),
+          instructions: customer.instructions.trim(),
         },
         paymentMethod,
-        paymentStatus: paymentMethod === 'upi_prepaid' ? 'verification_pending' : 'pending',
-        upiReference: paymentMethod === 'upi_prepaid' ? cleanUpiRef : undefined,
+        paymentStatus: requiresUpiPayment ? 'verification_pending' : 'pending',
+        upiReference: verifiedUtr,
         items: [...items],
         subtotal,
         discount: discount > 0 ? discount : undefined,
@@ -375,7 +361,7 @@ export function CartCheckoutDrawer({
         note: combinedNote || undefined,
       });
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Unable to place order right now.');
+      setFormError(formatFriendlyFirestoreError(err));
     } finally {
       setSubmitting(false);
     }
@@ -390,23 +376,23 @@ export function CartCheckoutDrawer({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg h-full bg-[#FAFAF7] border-l border-[#E4DFD5] shadow-2xl flex flex-col"
+        className="w-full max-w-lg h-full bg-[#FAF5EE] border-l border-[#E6DDD1] shadow-2xl flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Drawer Header */}
-        <div className="px-6 py-4 border-b border-[#E4DFD5] flex items-center justify-between gap-4 bg-[#FFFFFF]">
+        <div className="px-6 py-4 border-b border-[#E6DDD1] flex items-center justify-between gap-4 bg-[#FFFDF9]">
           <div className="flex items-center gap-3">
             {step === 'checkout' && (
               <button
                 type="button"
                 onClick={() => setStep('bag')}
                 aria-label="Back to cart"
-                className="p-2 -ml-2 rounded-lg text-[#57534E] hover:text-[#1C1917] hover:bg-[#F3EBDF] transition-colors cursor-pointer"
+                className="p-2 -ml-2 rounded-lg text-[#6D4C3D] hover:text-[#3B2314] hover:bg-[#F3EBDF] transition-colors cursor-pointer"
               >
                 <ArrowLeft className="w-4 h-4" />
               </button>
             )}
-            <h2 className="font-display text-xl font-semibold text-[#1C1917]">
+            <h2 className="font-display text-xl font-semibold text-[#3B2314]">
               {step === 'bag' ? 'Your Shopping Cart' : 'Checkout & Payment'}
             </h2>
           </div>
@@ -415,7 +401,7 @@ export function CartCheckoutDrawer({
             type="button"
             onClick={onClose}
             aria-label="Close cart"
-            className="w-10 h-10 flex items-center justify-center rounded-lg text-[#57534E] hover:text-[#1C1917] hover:bg-[#F3EBDF] transition-colors cursor-pointer"
+            className="w-10 h-10 flex items-center justify-center rounded-lg text-[#6D4C3D] hover:text-[#3B2314] hover:bg-[#F3EBDF] transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -423,8 +409,8 @@ export function CartCheckoutDrawer({
 
         {/* Free Delivery Progress */}
         {items.length > 0 && (
-          <div className="px-6 py-3 bg-[#F3EBDF] border-b border-[#E4DFD5]">
-            <div className="flex items-center justify-between text-xs text-[#57534E] mb-1.5">
+          <div className="px-6 py-3 bg-[#F3EBDF] border-b border-[#E6DDD1]">
+            <div className="flex items-center justify-between text-xs text-[#6D4C3D] mb-1.5">
               {qualifiesFreeDelivery ? (
                 <span className="font-medium text-[#15803D] flex items-center gap-1.5">
                   <Check className="w-3.5 h-3.5" />
@@ -433,17 +419,17 @@ export function CartCheckoutDrawer({
               ) : (
                 <span>
                   Add{' '}
-                  <strong className="font-mono-tabular font-semibold text-[#1C1917]">
+                  <strong className="font-mono-tabular font-semibold text-[#3B2314]">
                     {formatMoney(remainingForFree, settings.currency)}
                   </strong>{' '}
                   for free home delivery
                 </span>
               )}
-              <span className="font-mono-tabular text-[#57534E]">{progressPct}%</span>
+              <span className="font-mono-tabular text-[#6D4C3D]">{progressPct}%</span>
             </div>
-            <div className="h-1.5 w-full bg-[#E4DFD5] rounded-full overflow-hidden">
+            <div className="h-1.5 w-full bg-[#E6DDD1] rounded-full overflow-hidden">
               <div
-                className="h-full bg-[#9A3412] transition-all duration-200"
+                className="h-full bg-[#C45512] transition-all duration-200"
                 style={{ width: `${progressPct}%` }}
               />
             </div>
@@ -454,186 +440,97 @@ export function CartCheckoutDrawer({
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {items.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center py-12">
-              <div className="w-14 h-14 rounded-full bg-[#F3EBDF] border border-[#E4DFD5] flex items-center justify-center text-[#57534E] mb-4">
+              <div className="w-14 h-14 rounded-full bg-[#F3EBDF] border border-[#E6DDD1] flex items-center justify-center text-[#6D4C3D] mb-4">
                 <ShoppingBag className="w-6 h-6" strokeWidth={1.5} />
               </div>
-              <p className="font-display text-lg font-semibold text-[#1C1917]">
+              <p className="font-display text-lg font-semibold text-[#3B2314]">
                 Your cart is empty
               </p>
-              <p className="mt-1.5 text-sm text-[#57534E] max-w-xs">
+              <p className="mt-1.5 text-sm text-[#6D4C3D] max-w-xs">
                 Add celebration cakes, puffs, Osmania biscuits, sweets, or Irani chai combos to get started.
               </p>
               <button
                 type="button"
                 onClick={onClose}
-                className="mt-6 px-5 py-2.5 bg-[#9A3412] hover:bg-[#7C2D12] text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
+                className="mt-6 px-5 py-2.5 bg-[#C45512] hover:bg-[#A9450C] text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
               >
                 Explore Menu
               </button>
             </div>
           ) : step === 'bag' ? (
             <div className="space-y-6">
-              {/* Sold-out / Unavailable Item Alert */}
-              {hasUnavailableItems && (
-                <div
-                  role="alert"
-                  className="p-3.5 rounded-xl bg-[#FEF2F2] border border-[#FECACA] flex items-start justify-between gap-3"
-                >
-                  <div className="flex items-start gap-2.5 text-xs text-[#991B1B]">
-                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                    <div>
-                      <p className="font-semibold">
-                        {unavailableItems.length}{' '}
-                        {unavailableItems.length === 1 ? 'item is' : 'items are'} currently sold out
-                      </p>
-                      <p className="mt-0.5 text-[#7F1D1D]">
-                        Remove unavailable items before proceeding to checkout.
-                      </p>
-                    </div>
-                  </div>
-                  {onRemoveUnavailableItems && (
-                    <button
-                      type="button"
-                      onClick={onRemoveUnavailableItems}
-                      className="px-2.5 py-1.5 text-[11px] font-semibold bg-[#991B1B] text-white rounded-lg hover:bg-[#7F1D1D] shrink-0 cursor-pointer"
-                    >
-                      Remove
-                    </button>
-                  )}
-                </div>
-              )}
-
               {/* Itemized List */}
-              <ul className="divide-y divide-[#E4DFD5]">
-                {items.map((item) => {
-                  const isItemUnavailable = unavailableProductIds?.has(item.productId) ?? false;
-                  return (
-                    <li
-                      key={item.cartItemId}
-                      className={`py-4 first:pt-0 flex gap-4 ${isItemUnavailable ? 'opacity-75' : ''}`}
-                    >
-                      <div className="w-20 h-16 rounded-xl overflow-hidden bg-[#EAE0D2] shrink-0">
-                        <ResilientImage
-                          src={item.image}
-                          alt={item.name}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <h3 className="text-sm font-semibold text-[#1C1917] truncate">
-                              {item.name}
-                            </h3>
-                            <p className="text-xs text-[#57534E] mt-0.5">
-                              {item.optionLabel}
-                              {isItemUnavailable && (
-                                <span className="ml-2 font-semibold text-[#B91C1C]">· Sold Out</span>
-                              )}
+              <ul className="divide-y divide-[#E6DDD1]">
+                {items.map((item) => (
+                  <li key={item.cartItemId} className="py-4 first:pt-0 flex gap-4">
+                    <div className="w-20 h-16 rounded-xl overflow-hidden bg-[#EAE0D2] shrink-0">
+                      <ResilientImage
+                        src={item.image}
+                        alt={item.name}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <h3 className="text-sm font-semibold text-[#3B2314] truncate">
+                            {item.name}
+                          </h3>
+                          <p className="text-xs text-[#6D4C3D] mt-0.5">{item.optionLabel}</p>
+                          {item.customizationSummary && (
+                            <p className="text-[11px] text-[#C45512] mt-1 leading-snug">
+                              {item.customizationSummary}
                             </p>
-                            {item.customizationSummary && (
-                              <p className="text-[11px] text-[#9A3412] mt-1 leading-snug">
-                                {item.customizationSummary}
-                              </p>
-                            )}
-                          </div>
-                          <span className="font-mono-tabular text-sm font-medium text-[#1C1917] shrink-0">
-                            {formatMoney(item.unitPrice * item.quantity, settings.currency)}
-                          </span>
+                          )}
                         </div>
+                        <span className="font-mono-tabular text-sm font-medium text-[#3B2314] shrink-0">
+                          {formatMoney(item.unitPrice * item.quantity, settings.currency)}
+                        </span>
+                      </div>
 
-                        <div className="mt-3 flex items-center justify-between">
-                          <div className="inline-flex items-center border border-[#D6C9B8] rounded-lg bg-[#FFFFFF]">
-                            <button
-                              type="button"
-                              onClick={() => onUpdateQuantity(item.cartItemId, -1)}
-                              aria-label={`Decrease ${item.name} quantity`}
-                              className="w-8 h-8 flex items-center justify-center text-[#1C1917] hover:bg-[#F3EBDF] rounded-l-lg cursor-pointer"
-                            >
-                              <Minus className="w-3.5 h-3.5" />
-                            </button>
-                            <span className="w-8 text-center font-mono-tabular text-xs font-medium">
-                              {item.quantity}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => onUpdateQuantity(item.cartItemId, 1)}
-                              disabled={isItemUnavailable}
-                              aria-label={`Increase ${item.name} quantity`}
-                              className="w-8 h-8 flex items-center justify-center text-[#1C1917] hover:bg-[#F3EBDF] disabled:opacity-40 rounded-r-lg cursor-pointer"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-
+                      <div className="mt-3 flex items-center justify-between">
+                        <div className="inline-flex items-center border border-[#D6C9B8] rounded-lg bg-[#FFFDF9]">
                           <button
                             type="button"
-                            onClick={() => onRemoveItem(item.cartItemId)}
-                            aria-label={`Remove ${item.name}`}
-                            className="text-xs text-[#57534E] hover:text-[#B91C1C] inline-flex items-center gap-1 py-1 px-2 cursor-pointer"
+                            onClick={() => onUpdateQuantity(item.cartItemId, -1)}
+                            aria-label={`Decrease ${item.name} quantity`}
+                            className="w-8 h-8 flex items-center justify-center text-[#3B2314] hover:bg-[#F3EBDF] rounded-l-lg cursor-pointer"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span>Remove</span>
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="w-8 text-center font-mono-tabular text-xs font-medium">
+                            {item.quantity}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => onUpdateQuantity(item.cartItemId, 1)}
+                            aria-label={`Increase ${item.name} quantity`}
+                            className="w-8 h-8 flex items-center justify-center text-[#3B2314] hover:bg-[#F3EBDF] rounded-r-lg cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
                           </button>
                         </div>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
 
-              {/* Smart Cart Upsells ("Complete Your Order") */}
-              {upsellProducts.length > 0 && onQuickAddProduct && (
-                <div className="pt-4 border-t border-[#E4DFD5] space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-[#1C1917] inline-flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5 text-[#9A3412]" />
-                      <span>Complete Your Order</span>
-                    </span>
-                    <span className="text-[11px] text-[#57534E]">Popular pairings</span>
-                  </div>
-                  <div className="grid grid-cols-1 gap-2">
-                    {upsellProducts.map((upsell) => (
-                      <div
-                        key={upsell.id}
-                        className="p-2.5 rounded-xl bg-white border border-[#E4DFD5] flex items-center justify-between gap-3"
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <div className="w-11 h-11 rounded-lg overflow-hidden bg-[#EAE0D2] shrink-0">
-                            <ResilientImage
-                              src={upsell.image}
-                              alt={upsell.name}
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-xs font-semibold text-[#1C1917] truncate">
-                              {upsell.name}
-                            </p>
-                            <p className="font-mono-tabular text-[11px] text-[#57534E]">
-                              {formatMoney(upsell.price, settings.currency)} · {upsell.weight}
-                            </p>
-                          </div>
-                        </div>
                         <button
                           type="button"
-                          onClick={() => onQuickAddProduct(upsell)}
-                          aria-label={`Quick add ${upsell.name}`}
-                          className="px-3 py-1.5 text-xs font-semibold text-[#9A3412] bg-[#FFF7ED] border border-[#9A3412]/40 hover:bg-[#9A3412] hover:text-white rounded-lg transition-colors cursor-pointer shrink-0 whitespace-nowrap"
+                          onClick={() => onRemoveItem(item.cartItemId)}
+                          aria-label={`Remove ${item.name}`}
+                          className="text-xs text-[#6D4C3D] hover:text-[#B91C1C] inline-flex items-center gap-1 py-1 px-2 cursor-pointer"
                         >
-                          + Add
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Remove</span>
                         </button>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
 
               {/* Coupon Codes */}
-              <div className="pt-4 border-t border-[#E4DFD5] space-y-2.5">
+              <div className="pt-4 border-t border-[#E6DDD1] space-y-2.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-[#57534E] inline-flex items-center gap-1.5">
-                    <Tag className="w-3.5 h-3.5 text-[#9A3412]" />
+                  <span className="text-xs font-medium text-[#6D4C3D] inline-flex items-center gap-1.5">
+                    <Tag className="w-3.5 h-3.5 text-[#C45512]" />
                     <span>Apply Coupon &amp; Bakery Offers</span>
                   </span>
                   {activeOffer && (
@@ -650,22 +547,15 @@ export function CartCheckoutDrawer({
                 <div className="flex gap-2">
                   <input
                     type="text"
-                    aria-label="Coupon code"
                     value={promoInput}
                     onChange={(e) => setPromoInput(e.target.value.toUpperCase())}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handlePromoApply();
-                      }
-                    }}
                     placeholder="Enter coupon code (e.g. FESTIVE15)"
-                    className="flex-1 px-3 py-2 text-xs font-mono-tabular uppercase bg-[#FFFFFF] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#9A3412]"
+                    className="flex-1 px-3 py-2 text-xs font-mono-tabular uppercase bg-[#FFFDF9] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#C45512]"
                   />
                   <button
                     type="button"
                     onClick={() => handlePromoApply()}
-                    className="px-4 py-2 text-xs font-medium bg-[#1C1917] text-white rounded-xl hover:bg-[#52321E] cursor-pointer whitespace-nowrap"
+                    className="px-4 py-2 text-xs font-medium bg-[#3B2314] text-white rounded-xl hover:bg-[#52321E] cursor-pointer whitespace-nowrap"
                   >
                     Apply
                   </button>
@@ -685,8 +575,8 @@ export function CartCheckoutDrawer({
                           }}
                           className={`px-2.5 py-1.5 text-xs rounded-lg border transition-colors cursor-pointer ${
                             activeOffer?.code === offer.code
-                              ? 'border-[#9A3412] bg-[#9A3412]/10 text-[#9A3412] font-medium'
-                              : 'border-[#E4DFD5] bg-[#FFFFFF] text-[#57534E] hover:border-[#CBBBA7]'
+                              ? 'border-[#C45512] bg-[#C45512]/10 text-[#C45512] font-medium'
+                              : 'border-[#E6DDD1] bg-[#FFFDF9] text-[#6D4C3D] hover:border-[#CBBBA7]'
                           }`}
                         >
                           <span className="font-mono-tabular font-semibold">{offer.code}</span>
@@ -702,22 +592,14 @@ export function CartCheckoutDrawer({
                 )}
 
                 {promoFeedback && (
-                  <p
-                    className={`text-xs ${
-                      promoFeedback.startsWith('Applied')
-                        ? 'text-[#15803D]'
-                        : 'text-[#9A3412]'
-                    }`}
-                  >
-                    {promoFeedback}
-                  </p>
+                  <p className="text-xs text-[#15803D]">{promoFeedback}</p>
                 )}
               </div>
 
               {/* Scheduled Delivery Slot */}
-              <div className="pt-4 border-t border-[#E4DFD5] space-y-3">
+              <div className="pt-4 border-t border-[#E6DDD1] space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-[#57534E]">Scheduled Delivery</span>
+                  <span className="text-xs font-medium text-[#6D4C3D]">Scheduled Delivery</span>
                   <div className="inline-flex p-0.5 rounded-lg bg-[#EAE0D2]">
                     {(['Today', 'Tomorrow'] as const).map((day) => (
                       <button
@@ -726,8 +608,8 @@ export function CartCheckoutDrawer({
                         onClick={() => onSelectDeliveryDay(day)}
                         className={`px-3 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
                           deliveryDay === day
-                            ? 'bg-[#FFFFFF] text-[#1C1917] shadow-xs'
-                            : 'text-[#57534E] hover:text-[#1C1917]'
+                            ? 'bg-[#FFFDF9] text-[#3B2314] shadow-xs'
+                            : 'text-[#6D4C3D] hover:text-[#3B2314]'
                         }`}
                       >
                         {day}
@@ -737,7 +619,7 @@ export function CartCheckoutDrawer({
                 </div>
 
                 <div>
-                  <span className="text-xs font-medium text-[#57534E] block mb-2">
+                  <span className="text-xs font-medium text-[#6D4C3D] block mb-2">
                     Select Delivery Window
                   </span>
                   <div className="grid grid-cols-1 gap-2">
@@ -750,18 +632,18 @@ export function CartCheckoutDrawer({
                           onClick={() => onSelectSlot(slot.id)}
                           className={`px-3.5 py-2.5 rounded-xl border text-left flex items-center justify-between transition-colors cursor-pointer ${
                             active
-                              ? 'border-[#9A3412] bg-[#9A3412]/8 text-[#1C1917]'
-                              : 'border-[#E4DFD5] bg-[#FFFFFF] text-[#57534E] hover:border-[#CBBBA7]'
+                              ? 'border-[#C45512] bg-[#C45512]/8 text-[#3B2314]'
+                              : 'border-[#E6DDD1] bg-[#FFFDF9] text-[#6D4C3D] hover:border-[#CBBBA7]'
                           }`}
                         >
                           <div>
-                            <span className="text-sm font-medium text-[#1C1917]">{slot.label}</span>
+                            <span className="text-sm font-medium text-[#3B2314]">{slot.label}</span>
                             <span className="mx-2 text-[#D6C9B8]">·</span>
-                            <span className="font-mono-tabular text-xs text-[#57534E]">
+                            <span className="font-mono-tabular text-xs text-[#6D4C3D]">
                               {slot.window}
                             </span>
                           </div>
-                          <span className="text-xs text-[#57534E] font-mono-tabular">
+                          <span className="text-xs text-[#6D4C3D] font-mono-tabular">
                             {slot.spotsRemaining} left
                           </span>
                         </button>
@@ -771,7 +653,7 @@ export function CartCheckoutDrawer({
                 </div>
 
                 <div>
-                  <label htmlFor="bag-note" className="block text-xs font-medium text-[#57534E] mb-1.5">
+                  <label htmlFor="bag-note" className="block text-xs font-medium text-[#6D4C3D] mb-1.5">
                     Gift or Kitchen Note (Optional)
                   </label>
                   <input
@@ -780,7 +662,7 @@ export function CartCheckoutDrawer({
                     value={orderNote}
                     onChange={(e) => setOrderNote(e.target.value)}
                     placeholder="e.g., Extra plates & candles, less sugar"
-                    className="w-full px-3 py-2 text-sm bg-[#FFFFFF] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#9A3412]"
+                    className="w-full px-3 py-2 text-sm bg-[#FFFDF9] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#C45512]"
                   />
                 </div>
               </div>
@@ -789,19 +671,19 @@ export function CartCheckoutDrawer({
             /* Checkout Form Step */
             <form id="bakery-checkout-form" onSubmit={(e) => void handleCheckoutSubmit(e)} className="space-y-5">
               {!user && (
-                <div className="p-4 rounded-xl bg-[#FFFFFF] border border-[#E4DFD5] flex items-center justify-between gap-3">
+                <div className="p-4 rounded-xl bg-[#FFFDF9] border border-[#E6DDD1] flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-sm font-semibold text-[#1C1917]">
+                    <p className="text-sm font-semibold text-[#3B2314]">
                       Sign in as Customer to place order
                     </p>
-                    <p className="text-xs text-[#57534E] mt-0.5">
+                    <p className="text-xs text-[#6D4C3D] mt-0.5">
                       Saves your delivery addresses and tracks your order live.
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={onRequestSignIn}
-                    className="px-3.5 py-2 bg-[#1C1917] hover:bg-[#52321E] text-white text-xs font-medium rounded-xl shrink-0 cursor-pointer"
+                    className="px-3.5 py-2 bg-[#3B2314] hover:bg-[#52321E] text-white text-xs font-medium rounded-xl shrink-0 cursor-pointer"
                   >
                     Sign In
                   </button>
@@ -817,19 +699,19 @@ export function CartCheckoutDrawer({
                 </div>
               )}
 
-              <div className="p-3.5 rounded-xl bg-[#F3EBDF] border border-[#E4DFD5] flex items-center justify-between text-xs">
+              <div className="p-3.5 rounded-xl bg-[#F3EBDF] border border-[#E6DDD1] flex items-center justify-between text-xs">
                 <div>
-                  <p className="font-medium text-[#1C1917]">
+                  <p className="font-medium text-[#3B2314]">
                     {deliveryDay}, {activeSlot.window}
                   </p>
-                  <p className="text-[#57534E] mt-0.5">
+                  <p className="text-[#6D4C3D] mt-0.5">
                     {zone.neighborhood} · Est. transit {zone.etaMinutes}
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setStep('bag')}
-                  className="text-[#9A3412] font-medium underline underline-offset-2 cursor-pointer"
+                  className="text-[#C45512] font-medium underline underline-offset-2 cursor-pointer"
                 >
                   Change
                 </button>
@@ -838,8 +720,8 @@ export function CartCheckoutDrawer({
               {/* Saved Delivery Addresses Quick Picker */}
               {savedAddresses.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-xs font-medium text-[#57534E] inline-flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5 text-[#9A3412]" />
+                  <p className="text-xs font-medium text-[#6D4C3D] inline-flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-[#C45512]" />
                     <span>Saved Delivery Addresses</span>
                   </p>
                   <div className="grid grid-cols-1 gap-2">
@@ -854,15 +736,15 @@ export function CartCheckoutDrawer({
                           onClick={() => handleSelectSavedAddress(addr)}
                           className={`p-3 rounded-xl border text-left transition-colors cursor-pointer ${
                             isMatch
-                              ? 'border-[#9A3412] bg-[#9A3412]/8'
-                              : 'border-[#E4DFD5] bg-[#FFFFFF] hover:border-[#CBBBA7]'
+                              ? 'border-[#C45512] bg-[#C45512]/8'
+                              : 'border-[#E6DDD1] bg-[#FFFDF9] hover:border-[#CBBBA7]'
                           }`}
                         >
-                          <div className="flex items-center justify-between text-xs font-semibold text-[#1C1917]">
+                          <div className="flex items-center justify-between text-xs font-semibold text-[#3B2314]">
                             <span>{addr.label}</span>
-                            <span className="font-mono-tabular text-[#57534E]">{addr.postalCode}</span>
+                            <span className="font-mono-tabular text-[#6D4C3D]">{addr.postalCode}</span>
                           </div>
-                          <p className="text-xs text-[#57534E] mt-0.5 truncate">
+                          <p className="text-xs text-[#6D4C3D] mt-0.5 truncate">
                             {addr.streetAddress}
                             {addr.apartment ? `, ${addr.apartment}` : ''}
                           </p>
@@ -874,10 +756,10 @@ export function CartCheckoutDrawer({
               )}
 
               <div className="space-y-3">
-                <h3 className="text-sm font-semibold text-[#1C1917]">Recipient &amp; Delivery Address</h3>
+                <h3 className="text-sm font-semibold text-[#3B2314]">Recipient &amp; Delivery Address</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label htmlFor="chk-name" className="block text-xs text-[#57534E] mb-1">
+                    <label htmlFor="chk-name" className="block text-xs text-[#6D4C3D] mb-1">
                       Full Name
                     </label>
                     <input
@@ -887,11 +769,11 @@ export function CartCheckoutDrawer({
                       value={customer.fullName}
                       onChange={(e) => setCustomer({ ...customer, fullName: e.target.value })}
                       placeholder="Karthik Rao"
-                      className="w-full px-3 py-2 text-sm bg-[#FFFFFF] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#9A3412]"
+                      className="w-full px-3 py-2 text-sm bg-[#FFFDF9] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#C45512]"
                     />
                   </div>
                   <div>
-                    <label htmlFor="chk-phone" className="block text-xs text-[#57534E] mb-1">
+                    <label htmlFor="chk-phone" className="block text-xs text-[#6D4C3D] mb-1">
                       Mobile Phone
                     </label>
                     <input
@@ -901,13 +783,13 @@ export function CartCheckoutDrawer({
                       value={customer.phone}
                       onChange={(e) => setCustomer({ ...customer, phone: e.target.value })}
                       placeholder={settings.phone}
-                      className="w-full px-3 py-2 text-sm bg-[#FFFFFF] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#9A3412]"
+                      className="w-full px-3 py-2 text-sm bg-[#FFFDF9] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#C45512]"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label htmlFor="chk-street" className="block text-xs text-[#57534E] mb-1">
+                  <label htmlFor="chk-street" className="block text-xs text-[#6D4C3D] mb-1">
                     Street Address
                   </label>
                   <input
@@ -917,13 +799,13 @@ export function CartCheckoutDrawer({
                     value={customer.streetAddress}
                     onChange={(e) => setCustomer({ ...customer, streetAddress: e.target.value })}
                     placeholder="Near Widdi Centre, Mangalagiri"
-                    className="w-full px-3 py-2 text-sm bg-[#FFFFFF] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#9A3412]"
+                    className="w-full px-3 py-2 text-sm bg-[#FFFDF9] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#C45512]"
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label htmlFor="chk-apt" className="block text-xs text-[#57534E] mb-1">
+                    <label htmlFor="chk-apt" className="block text-xs text-[#6D4C3D] mb-1">
                       Flat / Landmark
                     </label>
                     <input
@@ -932,11 +814,11 @@ export function CartCheckoutDrawer({
                       value={customer.apartment}
                       onChange={(e) => setCustomer({ ...customer, apartment: e.target.value })}
                       placeholder="Flat 204"
-                      className="w-full px-3 py-2 text-sm bg-[#FFFFFF] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#9A3412]"
+                      className="w-full px-3 py-2 text-sm bg-[#FFFDF9] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#C45512]"
                     />
                   </div>
                   <div>
-                    <label htmlFor="chk-zip" className="block text-xs text-[#57534E] mb-1">
+                    <label htmlFor="chk-zip" className="block text-xs text-[#6D4C3D] mb-1">
                       Pin Code
                     </label>
                     <input
@@ -949,13 +831,13 @@ export function CartCheckoutDrawer({
                         onPostalCodeChange(e.target.value);
                       }}
                       placeholder="522503"
-                      className="w-full px-3 py-2 text-sm font-mono-tabular bg-[#FFFFFF] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#9A3412]"
+                      className="w-full px-3 py-2 text-sm font-mono-tabular bg-[#FFFDF9] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#C45512]"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label htmlFor="chk-instructions" className="block text-xs text-[#57534E] mb-1">
+                  <label htmlFor="chk-instructions" className="block text-xs text-[#6D4C3D] mb-1">
                     Delivery Instructions
                   </label>
                   <input
@@ -964,20 +846,20 @@ export function CartCheckoutDrawer({
                     value={customer.instructions}
                     onChange={(e) => setCustomer({ ...customer, instructions: e.target.value })}
                     placeholder="Ring doorbell once, call upon arrival"
-                    className="w-full px-3 py-2 text-sm bg-[#FFFFFF] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#9A3412]"
+                    className="w-full px-3 py-2 text-sm bg-[#FFFDF9] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#C45512]"
                   />
                 </div>
 
                 {user && (
                   <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                    <label className="inline-flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
+                    <label className="inline-flex items-center gap-2 text-xs text-[#3B2314] cursor-pointer">
                       <input
                         type="checkbox"
                         checked={saveAddressChecked}
                         onChange={(e) => setSaveAddressChecked(e.target.checked)}
-                        className="rounded border-[#D6C9B8] accent-[#9A3412]"
+                        className="rounded border-[#D6C9B8] accent-[#C45512]"
                       />
-                      <BookmarkCheck className="w-3.5 h-3.5 text-[#9A3412]" />
+                      <BookmarkCheck className="w-3.5 h-3.5 text-[#C45512]" />
                       <span>Save to my address book</span>
                     </label>
                     {saveAddressChecked && (
@@ -987,7 +869,7 @@ export function CartCheckoutDrawer({
                         value={addressLabel}
                         onChange={(e) => setAddressLabel(e.target.value)}
                         placeholder="Label (Home / Office)"
-                        className="w-32 px-2.5 py-1 text-xs bg-[#FFFFFF] border border-[#D6C9B8] rounded-lg"
+                        className="w-32 px-2.5 py-1 text-xs bg-[#FFFDF9] border border-[#D6C9B8] rounded-lg"
                       />
                     )}
                   </div>
@@ -995,8 +877,8 @@ export function CartCheckoutDrawer({
               </div>
 
               {/* Payment Method */}
-              <div className="space-y-3 pt-2 border-t border-[#E4DFD5]">
-                <h3 className="text-sm font-semibold text-[#1C1917]">Payment Options</h3>
+              <div className="space-y-3 pt-2 border-t border-[#E6DDD1]">
+                <h3 className="text-sm font-semibold text-[#3B2314]">Payment Options</h3>
                 <div className="grid grid-cols-1 gap-2">
                   {(
                     [
@@ -1030,20 +912,20 @@ export function CartCheckoutDrawer({
                       onClick={() => setPaymentMethod(method.id)}
                       className={`px-3.5 py-2.5 rounded-xl border text-left transition-colors cursor-pointer ${
                         paymentMethod === method.id
-                          ? 'border-[#9A3412] bg-[#9A3412]/8'
-                          : 'border-[#E4DFD5] bg-[#FFFFFF] hover:border-[#CBBBA7]'
+                          ? 'border-[#C45512] bg-[#C45512]/8'
+                          : 'border-[#E6DDD1] bg-[#FFFDF9] hover:border-[#CBBBA7]'
                       }`}
                     >
-                      <p className="text-sm font-medium text-[#1C1917]">{method.title}</p>
-                      <p className="text-xs text-[#57534E] mt-0.5">{method.desc}</p>
+                      <p className="text-sm font-medium text-[#3B2314]">{method.title}</p>
+                      <p className="text-xs text-[#6D4C3D] mt-0.5">{method.desc}</p>
                     </button>
                   ))}
                 </div>
 
                 {paymentMethod === 'online_card' && (
-                  <div className="p-4 rounded-xl bg-[#FFFFFF] border border-[#E4DFD5] space-y-2.5">
-                    <div className="flex items-center gap-2 text-xs font-semibold text-[#1C1917]">
-                      <CreditCard className="w-4 h-4 text-[#9A3412]" />
+                  <div className="p-4 rounded-xl bg-[#FFFDF9] border border-[#E6DDD1] space-y-2.5">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-[#3B2314]">
+                      <CreditCard className="w-4 h-4 text-[#C45512]" />
                       <span>Select Card Network</span>
                     </div>
                     <div className="grid grid-cols-3 gap-2">
@@ -1054,49 +936,58 @@ export function CartCheckoutDrawer({
                           onClick={() => setCardPreference(net)}
                           className={`py-2 text-xs font-medium rounded-lg border cursor-pointer ${
                             cardPreference === net
-                              ? 'border-[#9A3412] bg-[#9A3412] text-white'
-                              : 'border-[#E4DFD5] bg-[#FAFAF7] text-[#1C1917]'
+                              ? 'border-[#C45512] bg-[#C45512] text-white'
+                              : 'border-[#E6DDD1] bg-[#FAF5EE] text-[#3B2314]'
                           }`}
                         >
                           {net}
                         </button>
                       ))}
                     </div>
-                    <p className="text-[11px] text-[#57534E] leading-relaxed">
+                    <p className="text-[11px] text-[#6D4C3D] leading-relaxed">
                       For card security, our rider brings a wireless POS card machine to your door or shares an encrypted payment link upon confirmation.
                     </p>
                   </div>
                 )}
 
                 {paymentMethod === 'upi_prepaid' && (
-                  <div className="p-4 rounded-xl bg-[#FFFFFF] border border-[#E4DFD5] space-y-3">
-                    {merchantUpiId ? (
+                  <div className="p-4 rounded-xl bg-[#FFFDF9] border border-[#E6DDD1] space-y-3">
+                    {total <= 0 ? (
+                      <p className="text-xs font-medium text-[#15803D]">
+                        Your coupon covers the full order total ({formatMoney(0, settings.currency)}). No UPI payment is required.
+                      </p>
+                    ) : merchantUpiId ? (
                       <>
                         <div className="flex flex-col sm:flex-row items-center gap-4">
-                          <div className="p-2.5 bg-white border border-[#E4DFD5] rounded-xl shrink-0">
+                          <div className="p-2.5 bg-white border border-[#E6DDD1] rounded-xl shrink-0">
                             <QRCodeSVG
                               value={upiUri}
                               size={128}
                               level="M"
                               bgColor="#FFFFFF"
-                              fgColor="#1C1917"
+                              fgColor="#3B2314"
                             />
                           </div>
                           <div className="flex-1 space-y-2 text-center sm:text-left">
-                            <p className="text-xs font-medium text-[#57534E]">
-                              Scan with Google Pay, PhonePe or Paytm to pay{' '}
-                              <span className="font-mono-tabular font-semibold text-[#1C1917]">
+                            <p className="text-xs font-medium text-[#6D4C3D]">
+                              Step 1: Pay exact{' '}
+                              <span className="font-mono-tabular font-semibold text-[#3B2314]">
                                 {formatMoney(total, settings.currency)}
+                              </span>{' '}
+                              via GPay, PhonePe or Paytm (Order Ref:{' '}
+                              <span className="font-mono-tabular font-semibold text-[#3B2314]">
+                                {draftOrderId}
                               </span>
+                              )
                             </p>
                             <div className="flex items-center justify-center sm:justify-start gap-2">
-                              <code className="px-2 py-1 text-xs font-mono-tabular bg-[#F3EBDF] border border-[#E4DFD5] rounded text-[#1C1917]">
+                              <code className="px-2 py-1 text-xs font-mono-tabular bg-[#F3EBDF] border border-[#E6DDD1] rounded text-[#3B2314]">
                                 {merchantUpiId}
                               </code>
                               <button
                                 type="button"
                                 onClick={() => void handleCopyUpi()}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-[#FAFAF7] border border-[#D6C9B8] rounded hover:border-[#1C1917] cursor-pointer"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-[#FAF5EE] border border-[#D6C9B8] rounded hover:border-[#3B2314] cursor-pointer"
                               >
                                 {copiedUpi ? (
                                   <>
@@ -1113,7 +1004,7 @@ export function CartCheckoutDrawer({
                             </div>
                             <a
                               href={upiUri}
-                              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium bg-[#1C1917] hover:bg-[#52321E] text-white rounded-xl transition-colors"
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium bg-[#3B2314] hover:bg-[#52321E] text-white rounded-xl transition-colors"
                             >
                               <span>Open GPay / PhonePe</span>
                               <ExternalLink className="w-3.5 h-3.5" />
@@ -1121,19 +1012,64 @@ export function CartCheckoutDrawer({
                           </div>
                         </div>
 
-                        <div className="pt-2 border-t border-[#E4DFD5]">
-                          <label htmlFor="chk-utr" className="block text-xs font-medium text-[#1C1917] mb-1">
-                            UPI Reference / UTR Number (Required after paying)
-                          </label>
+                        <div className="pt-3 border-t border-[#E6DDD1] space-y-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <label htmlFor="chk-utr" className="block text-xs font-medium text-[#3B2314]">
+                              Step 2: 12-Digit UPI UTR / Reference ID
+                            </label>
+                            <span
+                              className={`font-mono-tabular text-[11px] font-medium ${
+                                utrCheck.valid ? 'text-[#15803D]' : 'text-[#6D4C3D]'
+                              }`}
+                            >
+                              {utrCheck.cleaned.length}/12 digits
+                            </span>
+                          </div>
                           <input
                             id="chk-utr"
                             type="text"
-                            maxLength={40}
+                            inputMode="numeric"
+                            pattern="[0-9]{12}"
+                            autoComplete="off"
+                            maxLength={16}
                             value={upiReference}
-                            onChange={(e) => setUpiReference(e.target.value)}
-                            placeholder="Enter 12-digit UTR / Transaction ID"
-                            className="w-full px-3 py-2 text-sm font-mono-tabular bg-[#FAFAF7] border border-[#D6C9B8] rounded-xl focus:outline-none focus:border-[#9A3412]"
+                            onChange={(e) => setUpiReference(sanitizeUtrInput(e.target.value))}
+                            placeholder="Enter exact 12-digit UTR (e.g. 412345678901)"
+                            className={`w-full px-3 py-2 text-sm font-mono-tabular bg-[#FAF5EE] border rounded-xl focus:outline-none ${
+                              upiReference && !utrCheck.valid
+                                ? 'border-[#B91C1C] focus:border-[#B91C1C]'
+                                : utrCheck.valid
+                                  ? 'border-[#15803D] focus:border-[#15803D]'
+                                  : 'border-[#D6C9B8] focus:border-[#C45512]'
+                            }`}
                           />
+                          {upiReference.length > 0 && !utrCheck.valid && (
+                            <p className="text-[11px] text-[#B91C1C] leading-snug">
+                              {utrCheck.reason}
+                            </p>
+                          )}
+                          {utrCheck.valid && (
+                            <p className="text-[11px] text-[#15803D] flex items-center gap-1">
+                              <Check className="w-3.5 h-3.5 shrink-0" />
+                              <span>Valid 12-digit UTR format — bakery verifies credit before dispatch.</span>
+                            </p>
+                          )}
+
+                          <label className="flex items-start gap-2 pt-1 text-xs text-[#3B2314] cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={upiPaymentConfirmed}
+                              onChange={(e) => setUpiPaymentConfirmed(e.target.checked)}
+                              className="mt-0.5 rounded border-[#D6C9B8] accent-[#C45512]"
+                            />
+                            <span className="leading-snug">
+                              I have paid{' '}
+                              <strong className="font-mono-tabular">
+                                {formatMoney(total, settings.currency)}
+                              </strong>{' '}
+                              and copied the exact 12-digit UTR from my UPI receipt.
+                            </span>
+                          </label>
                         </div>
                       </>
                     ) : (
@@ -1149,10 +1085,10 @@ export function CartCheckoutDrawer({
               </div>
 
               {/* Courier Tip */}
-              <div className="space-y-2 pt-2 border-t border-[#E4DFD5]">
+              <div className="space-y-2 pt-2 border-t border-[#E6DDD1]">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="font-medium text-[#1C1917]">Delivery Partner Tip</span>
-                  <span className="text-[#57534E]">100% goes to your rider</span>
+                  <span className="font-medium text-[#3B2314]">Delivery Partner Tip</span>
+                  <span className="text-[#6D4C3D]">100% goes to your rider</span>
                 </div>
                 <div className="grid grid-cols-4 gap-2">
                   {tipPresets.map((amount) => (
@@ -1162,8 +1098,8 @@ export function CartCheckoutDrawer({
                       onClick={() => setTip(amount)}
                       className={`py-2 text-xs font-mono-tabular font-medium rounded-xl border transition-colors cursor-pointer ${
                         tip === amount
-                          ? 'border-[#9A3412] bg-[#9A3412] text-white'
-                          : 'border-[#E4DFD5] bg-[#FFFFFF] text-[#1C1917] hover:border-[#CBBBA7]'
+                          ? 'border-[#C45512] bg-[#C45512] text-white'
+                          : 'border-[#E6DDD1] bg-[#FFFDF9] text-[#3B2314] hover:border-[#CBBBA7]'
                       }`}
                     >
                       {amount === 0 ? 'None' : formatMoney(amount, settings.currency)}
@@ -1177,23 +1113,11 @@ export function CartCheckoutDrawer({
 
         {/* Drawer Footer */}
         {items.length > 0 && (
-          <div className="px-6 py-4 border-t border-[#E4DFD5] bg-[#FFFFFF] space-y-3">
-            {savings.totalSavings > 0 && (
-              <div className="px-3 py-2 rounded-xl bg-[#ECFDF5] border border-[#A7F3D0] flex items-center justify-between text-xs text-[#065F46] font-semibold">
-                <span className="inline-flex items-center gap-1.5">
-                  <Tag className="w-3.5 h-3.5" />
-                  <span>Total Savings on This Order</span>
-                </span>
-                <span className="font-mono-tabular">
-                  {formatMoney(savings.totalSavings, settings.currency)} saved
-                </span>
-              </div>
-            )}
-
+          <div className="px-6 py-4 border-t border-[#E6DDD1] bg-[#FFFDF9] space-y-3">
             <div className="space-y-1.5 text-sm">
-              <div className="flex justify-between text-[#57534E]">
+              <div className="flex justify-between text-[#6D4C3D]">
                 <span>Item Total</span>
-                <span className="font-mono-tabular text-[#1C1917]">
+                <span className="font-mono-tabular text-[#3B2314]">
                   {formatMoney(subtotal, settings.currency)}
                 </span>
               </div>
@@ -1206,28 +1130,28 @@ export function CartCheckoutDrawer({
                 </div>
               )}
               {taxAmount > 0 && (
-                <div className="flex justify-between text-[#57534E]">
+                <div className="flex justify-between text-[#6D4C3D]">
                   <span>Bakery GST &amp; Packaging ({taxPercent}%)</span>
-                  <span className="font-mono-tabular text-[#1C1917]">
+                  <span className="font-mono-tabular text-[#3B2314]">
                     {formatMoney(taxAmount, settings.currency)}
                   </span>
                 </div>
               )}
-              <div className="flex justify-between text-[#57534E]">
+              <div className="flex justify-between text-[#6D4C3D]">
                 <span>Delivery Charges</span>
-                <span className="font-mono-tabular text-[#1C1917]">
+                <span className="font-mono-tabular text-[#3B2314]">
                   {deliveryFee === 0 ? 'Free' : formatMoney(deliveryFee, settings.currency)}
                 </span>
               </div>
               {step === 'checkout' && tip > 0 && (
-                <div className="flex justify-between text-[#57534E]">
+                <div className="flex justify-between text-[#6D4C3D]">
                   <span>Rider Tip</span>
-                  <span className="font-mono-tabular text-[#1C1917]">
+                  <span className="font-mono-tabular text-[#3B2314]">
                     {formatMoney(tip, settings.currency)}
                   </span>
                 </div>
               )}
-              <div className="flex justify-between pt-2 border-t border-[#E4DFD5] text-base font-semibold text-[#1C1917]">
+              <div className="flex justify-between pt-2 border-t border-[#E6DDD1] text-base font-semibold text-[#3B2314]">
                 <span>To Pay</span>
                 <span className="font-mono-tabular">
                   {formatMoney(step === 'bag' ? bagTotal : total, settings.currency)}
@@ -1238,18 +1162,17 @@ export function CartCheckoutDrawer({
             {step === 'bag' ? (
               <button
                 type="button"
-                disabled={hasUnavailableItems}
                 onClick={() => setStep('checkout')}
-                className="w-full py-3 px-5 bg-[#9A3412] hover:bg-[#7C2D12] disabled:bg-[#9CA3AF] disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
+                className="w-full py-3 px-5 bg-[#C45512] hover:bg-[#A9450C] text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
               >
-                {hasUnavailableItems ? 'Remove Sold-Out Items First' : 'Proceed to Checkout'}
+                Proceed to Checkout
               </button>
             ) : (
               <button
                 type="submit"
                 form="bakery-checkout-form"
-                disabled={submitting || hasUnavailableItems}
-                className="w-full py-3 px-5 bg-[#9A3412] hover:bg-[#7C2D12] disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
+                disabled={submitting}
+                className="w-full py-3 px-5 bg-[#C45512] hover:bg-[#A9450C] disabled:opacity-60 text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
               >
                 {submitting
                   ? 'Confirming Order...'
